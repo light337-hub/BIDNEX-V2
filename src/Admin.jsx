@@ -49,6 +49,9 @@ export default function Admin() {
   const [scoreAdjustModal, setScoreAdjustModal] = useState(null); // { teamId, teamName, currentPoints }
   const [scoreAdjustmentDelta, setScoreAdjustmentDelta] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [addingQuestion, setAddingQuestion] = useState(false); // show add-question form
+  const [newQuestion, setNewQuestion] = useState({ question: '', options: ['', '', '', ''], answer: '', category: '', difficulty: 'easy', explanation: '' });
+  const [livePenaltyInput, setLivePenaltyInput] = useState('');
 
   useEffect(() => {
     socket.on('admin:authenticated', () => {
@@ -158,6 +161,31 @@ export default function Admin() {
     });
     setScoreAdjustModal(null);
     setScoreAdjustmentDelta('');
+  };
+
+  const handleAddQuestion = (e) => {
+    e.preventDefault();
+    const opts = newQuestion.options.filter(o => o.trim());
+    if (opts.length < 2) return setError('Need at least 2 non-empty options.');
+    if (!opts.includes(newQuestion.answer)) return setError('Correct answer must match one of the options.');
+    socket.emit('admin:add_question', {
+      question: newQuestion.question,
+      options: opts,
+      answer: newQuestion.answer,
+      category: newQuestion.category || 'General',
+      difficulty: newQuestion.difficulty || 'easy',
+      explanation: newQuestion.explanation || ''
+    });
+    setAddingQuestion(false);
+    setNewQuestion({ question: '', options: ['', '', '', ''], answer: '', category: '', difficulty: 'easy', explanation: '' });
+  };
+
+  const handleLivePenalty = (e) => {
+    e.preventDefault();
+    const v = Number(livePenaltyInput);
+    if (!Number.isInteger(v) || v < 0) return setError('PASS penalty must be a non-negative integer.');
+    socket.emit('admin:update_pass_penalty', { passPenalty: v });
+    setLivePenaltyInput('');
   };
 
   // Admin Login — Glassmorphism + Poster (matches player login)
@@ -283,7 +311,7 @@ export default function Admin() {
           ARENA MONITOR
         </button>
         <button className={`admin-nav-tab ${activeTab === 'questions' ? 'active' : ''}`} onClick={() => setActiveTab('questions')}>
-          QUESTION MANAGER (25)
+          QUESTION MANAGER ({allQuestions.length})
         </button>
         <button className={`admin-nav-tab ${activeTab === 'rules' ? 'active' : ''}`} onClick={() => setActiveTab('rules')}>
           RULES & BID CHOICES
@@ -345,9 +373,29 @@ export default function Admin() {
                   <div style={{ fontSize: 12, color: 'var(--text-sub)' }}>Q{questionNumber} / {totalQuestions}</div>
                 </div>
 
-                {question ? (
+                {phase === 'finished' ? (
+                  <div style={{ padding: '24px 16px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 22, fontWeight: 900, color: 'var(--neon-green)', marginBottom: 8 }}>
+                      🏁 COMPETITION COMPLETED
+                    </div>
+                    <p style={{ color: 'var(--text-sub)', fontSize: 13, marginBottom: 18 }}>
+                      Tournament concluded. Player screens are viewing the ending video finale & final standings.
+                    </p>
+                    <button
+                      className="admin-btn admin-btn-danger"
+                      style={{ padding: '10px 22px', fontSize: 13, margin: '0 auto' }}
+                      onClick={() => {
+                        if (window.confirm('Reset tournament and restore all teams to 100 points?')) {
+                          socket.emit('admin:reset_tournament');
+                        }
+                      }}
+                    >
+                      🔄 RESET TOURNAMENT FOR NEXT ROUND
+                    </button>
+                  </div>
+                ) : question ? (
                   <div>
-                    <div style={{ fontSize: 18, fontWeight: 750, color: '#fff', marginBottom: 16 }}>{question.question}</div>
+                    <div style={{ fontSize: 18, fontWeight: 750, color: '#fff', marginBottom: 16, whiteSpace: 'pre-line' }}>{question.question}</div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
                       {question.options?.map((opt, i) => (
                         <div key={opt} style={{ padding: '10px 14px', borderRadius: 10, background: opt === question.answer ? 'rgba(16,185,129,0.15)' : '#07160d', border: opt === question.answer ? '1px solid var(--neon-green)' : '1px solid #142e1a', color: opt === question.answer ? 'var(--neon-green)' : '#cbd5e1', fontSize: 13 }}>
@@ -487,21 +535,29 @@ export default function Admin() {
           </div>
         )}
 
-        {/* TAB 2: QUESTION MANAGER (25 Questions) */}
+        {/* TAB 2: QUESTION MANAGER (Dynamic) */}
         {activeTab === 'questions' && (
           <div className="control-panel-box">
             <div className="panel-header-row">
               <div>
-                <div className="panel-title">QUESTION MANAGER (EXACTLY 25 QUESTIONS)</div>
+                <div className="panel-title">QUESTION MANAGER — {allQuestions.length} QUESTIONS</div>
                 <div style={{ fontSize: 12, color: 'var(--text-sub)', marginTop: 4 }}>
-                  {rulesLocked ? 'Tournament is running. Completed and current live questions are locked for fairness.' : 'Configure, replace, or reorder questions prior to starting.'}
+                  {rulesLocked ? 'Tournament running. Completed & current questions locked. Upcoming questions and additions are allowed.' : 'Add, edit, delete, or reorder questions freely before the tournament starts.'}
                 </div>
               </div>
+              <button
+                className="admin-btn admin-btn-primary"
+                onClick={() => { setAddingQuestion(true); setNewQuestion({ question: '', options: ['', '', '', ''], answer: '', category: '', difficulty: 'easy', explanation: '' }); }}
+                style={{ flexShrink: 0 }}
+              >
+                + ADD QUESTION
+              </button>
             </div>
 
             <div className="qm-list">
               {allQuestions.map((q, idx) => {
                 const canEdit = !rulesLocked || q.isUpcoming;
+                const canDelete = !rulesLocked || (rulesLocked && q.isUpcoming);
                 return (
                   <div key={q.id} className={`qm-item ${q.isCurrent ? 'active' : ''} ${q.isCompleted ? 'completed' : ''}`}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 16, flex: 1 }}>
@@ -534,13 +590,26 @@ export default function Admin() {
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', gap: 10 }}>
+                    <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
                       <button
                         className="admin-btn admin-btn-secondary"
                         disabled={!canEdit}
                         onClick={() => setEditingQuestion({ ...q, options: [...q.options] })}
                       >
                         {canEdit ? 'EDIT' : 'LOCKED'}
+                      </button>
+                      <button
+                        className="admin-btn admin-btn-danger"
+                        disabled={!canDelete}
+                        onClick={() => {
+                          if (window.confirm(`Delete Q${idx + 1}?\n"${q.question.substring(0, 80)}..."?\n\nThis cannot be undone.`)) {
+                            socket.emit('admin:delete_question', { questionId: q.id });
+                          }
+                        }}
+                        style={{ padding: '8px 12px', fontSize: 11 }}
+                        title={canDelete ? 'Delete this question' : 'Cannot delete current/past questions'}
+                      >
+                        DEL
                       </button>
                     </div>
                   </div>
@@ -567,7 +636,41 @@ export default function Admin() {
               )}
             </div>
 
+            {/* LIVE PASS PENALTY CONTROL — works even during active tournament */}
+            <div style={{ background: '#071410', border: '1px solid rgba(0,255,136,0.2)', borderRadius: 16, padding: 20, marginBottom: 24 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: '#a7f3d0', marginBottom: 6, letterSpacing: '0.08em' }}>
+                ⚡ LIVE PASS PENALTY CONTROL
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-sub)', marginBottom: 14 }}>
+                {rulesLocked
+                  ? <>Active penalty: <strong style={{ color: 'var(--neon-green)' }}>−{data.config?.passPenalty ?? 5} pts</strong>
+                    {data.config?.pendingPassPenalty !== null && data.config?.pendingPassPenalty !== undefined
+                      ? <> · <span style={{ color: '#fbbf24' }}>Pending next question: −{data.config.pendingPassPenalty} pts</span></>
+                      : null}
+                    <br />Setting a new value queues it for the <em>next question</em> — the current question is unaffected.</>
+                  : <>Set the PASS penalty. Applies immediately before the tournament starts.</>
+                }
+              </div>
+              <form onSubmit={handleLivePenalty} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <input
+                  type="number"
+                  value={livePenaltyInput}
+                  onChange={(e) => setLivePenaltyInput(e.target.value)}
+                  placeholder={String(data.config?.passPenalty ?? 5)}
+                  min="0"
+                  style={{ padding: '10px 14px', borderRadius: 10, border: '1px solid rgba(0,255,136,0.25)', background: '#050d07', color: '#fff', fontFamily: 'var(--font-mono)', fontSize: 15, width: 100, outline: 'none' }}
+                />
+                <span style={{ color: 'var(--text-sub)', fontSize: 12 }}>pts deducted on PASS</span>
+                <button type="submit" className="admin-btn admin-btn-primary" style={{ marginLeft: 'auto' }}>
+                  {rulesLocked ? 'SCHEDULE PENALTY' : 'APPLY PENALTY'}
+                </button>
+              </form>
+            </div>
+
             <form onSubmit={handleSaveRules}>
+              <div style={{ fontSize: 12, color: 'var(--text-sub)', marginBottom: 14, fontStyle: 'italic' }}>
+                The fields below are locked once the tournament starts. Use the panel above to change PASS penalty mid-game.
+              </div>
               <div className="form-field">
                 <label>AVAILABLE BID BUTTON VALUES (Comma-separated)</label>
                 <input
@@ -579,21 +682,6 @@ export default function Admin() {
                 />
                 <div style={{ fontSize: 11, color: 'var(--text-sub)' }}>
                   Players will only see these tactile buttons. Example: "5, 10, 15, 20"
-                </div>
-              </div>
-
-              <div className="form-field">
-                <label>PASS PENALTY MAGNITUDE (Points deducted upon PASS)</label>
-                <input
-                  type="number"
-                  value={passPenaltyInput}
-                  disabled={rulesLocked}
-                  onChange={(e) => setPassPenaltyInput(e.target.value)}
-                  placeholder="5"
-                  min="0"
-                />
-                <div style={{ fontSize: 11, color: 'var(--text-sub)' }}>
-                  Default is 5 (deducts 5 points from team).
                 </div>
               </div>
 
@@ -622,7 +710,7 @@ export default function Admin() {
               </div>
 
               <button type="submit" className="admin-btn admin-btn-primary" disabled={rulesLocked} style={{ marginTop: 14 }}>
-                UPDATE & SAVE RULES
+                UPDATE & SAVE PRE-TOURNAMENT RULES
               </button>
             </form>
           </div>
@@ -709,6 +797,99 @@ export default function Admin() {
           </div>
         )}
       </main>
+
+      {/* Add Question Modal */}
+      {addingQuestion && (
+        <div className="modal-backdrop">
+          <div className="modal-content">
+            <div className="modal-title">ADD NEW QUESTION (Q{allQuestions.length + 1})</div>
+            <form onSubmit={handleAddQuestion}>
+              <div className="form-field">
+                <label>QUESTION PROMPT</label>
+                <textarea
+                  value={newQuestion.question}
+                  onChange={(e) => setNewQuestion({ ...newQuestion, question: e.target.value })}
+                  placeholder="Type the question here..."
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="form-field">
+                  <label>CATEGORY</label>
+                  <input
+                    type="text"
+                    value={newQuestion.category}
+                    onChange={(e) => setNewQuestion({ ...newQuestion, category: e.target.value })}
+                    placeholder="e.g. Networking"
+                  />
+                </div>
+                <div className="form-field">
+                  <label>DIFFICULTY</label>
+                  <select
+                    value={newQuestion.difficulty}
+                    onChange={(e) => setNewQuestion({ ...newQuestion, difficulty: e.target.value })}
+                  >
+                    <option value="easy">Easy</option>
+                    <option value="medium">Medium</option>
+                    <option value="hard">Hard</option>
+                  </select>
+                </div>
+              </div>
+
+              <label style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.1em', display: 'block', marginBottom: 8 }}>
+                OPTIONS (A, B, C, D) — at least 2 required
+              </label>
+              {newQuestion.options.map((opt, i) => (
+                <div key={i} className="form-field" style={{ marginBottom: 8 }}>
+                  <input
+                    type="text"
+                    value={opt}
+                    placeholder={`Option ${['A','B','C','D'][i]}`}
+                    onChange={(e) => {
+                      const updated = [...newQuestion.options];
+                      updated[i] = e.target.value;
+                      setNewQuestion({ ...newQuestion, options: updated });
+                    }}
+                  />
+                </div>
+              ))}
+
+              <div className="form-field">
+                <label>CORRECT ANSWER</label>
+                <select
+                  value={newQuestion.answer}
+                  onChange={(e) => setNewQuestion({ ...newQuestion, answer: e.target.value })}
+                  required
+                >
+                  <option value="">-- Select correct answer --</option>
+                  {newQuestion.options.filter(o => o.trim()).map((opt) => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-field">
+                <label>EXPLANATION (REVEALED AT RESOLUTION)</label>
+                <textarea
+                  value={newQuestion.explanation}
+                  onChange={(e) => setNewQuestion({ ...newQuestion, explanation: e.target.value })}
+                  placeholder="Optional explanation shown after answer..."
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 20 }}>
+                <button type="button" className="admin-btn admin-btn-secondary" onClick={() => setAddingQuestion(false)}>
+                  CANCEL
+                </button>
+                <button type="submit" className="admin-btn admin-btn-primary">
+                  ADD QUESTION
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Edit Question Modal */}
       {editingQuestion && (

@@ -12,41 +12,49 @@ const distDir = path.join(rootDir, 'dist');
 const STATE_FILE = path.join(rootDir, 'tournament_state.json');
 const PORT = Number(process.env.PORT || 5000);
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'julie';
-const TOTAL_QUESTIONS = 25;
 
-// Default initial question pool (25 high-quality technical questions)
+// Version tag to safeguard official question bank across restarts
+const CURRENT_BANK_VERSION = 'v2_official_30_fixed';
+
+// Official Question Bank (30 questions from master question paper)
 const defaultQuestions = [
-  { id: 1, question: 'Which protocol is commonly used for lightweight IoT messaging?', options: ['HTTP', 'MQTT', 'FTP', 'SMTP'], answer: 'MQTT', category: 'IoT', difficulty: 'easy', explanation: 'MQTT (Message Queuing Telemetry Transport) is a lightweight publish-subscribe network protocol designed for resource-constrained IoT devices.' },
-  { id: 2, question: 'Which data structure follows FIFO (First-In, First-Out) order?', options: ['Stack', 'Queue', 'Tree', 'Graph'], answer: 'Queue', category: 'Data Structures', difficulty: 'easy', explanation: 'A Queue inserts elements at the rear and removes from the front, ensuring First-In First-Out order.' },
-  { id: 3, question: 'What does CSS primarily control in web applications?', options: ['Database logic', 'Page presentation & style', 'Server routing', 'CPU scheduling'], answer: 'Page presentation & style', category: 'Web', difficulty: 'easy', explanation: 'Cascading Style Sheets (CSS) dictate visual presentation, layout, fonts, and colors for HTML documents.' },
-  { id: 4, question: 'Which HTTP status code signifies "Not Found"?', options: ['200', '301', '404', '500'], answer: '404', category: 'Web', difficulty: 'easy', explanation: 'HTTP 404 Not Found indicates that the client was able to communicate with a given server, but the server could not find what was requested.' },
-  { id: 5, question: 'Which algorithm finds the single-source shortest path on graphs with non-negative edge weights?', options: ['Dijkstra', 'Kruskal', 'Boyer-Moore', 'KMP'], answer: 'Dijkstra', category: 'Algorithms', difficulty: 'medium', explanation: "Dijkstra's algorithm greedily expands the shortest path tree from source to target with non-negative edge weights." },
-  { id: 6, question: 'Which SQL command is used to query and retrieve rows from a table?', options: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], answer: 'SELECT', category: 'SQL', difficulty: 'easy', explanation: 'The SELECT statement returns a result set of records from one or more database tables.' },
-  { id: 7, question: 'Which Java keyword is used to inherit another class?', options: ['implements', 'extends', 'inherits', 'super'], answer: 'extends', category: 'Java', difficulty: 'easy', explanation: 'In Java, the extends keyword establishes an inheritance relationship between a subclass and its superclass.' },
-  { id: 8, question: 'What is the default standard port for unencrypted HTTP traffic?', options: ['21', '25', '80', '443'], answer: '80', category: 'Networking', difficulty: 'easy', explanation: 'Port 80 is assigned by IANA for standard unencrypted World Wide Web HTTP traffic (HTTPS uses 443).' },
-  { id: 9, question: 'Which library/framework popularised component-based UI with a virtual DOM?', options: ['React', 'MySQL', 'Docker', 'Redis'], answer: 'React', category: 'Web', difficulty: 'easy', explanation: 'React utilizes reusable components, declarative JSX, and an in-memory virtual DOM to optimize rendering.' },
-  { id: 10, question: 'Which relational database normal form eliminates partial functional dependencies?', options: ['1NF', '2NF', '3NF', 'BCNF'], answer: '2NF', category: 'DBMS', difficulty: 'medium', explanation: 'Second Normal Form (2NF) requires 1NF and guarantees that all non-key attributes are fully functionally dependent on the entire primary key.' },
-  { id: 11, question: 'Which cloud computing model delivers raw virtual machines, storage, and networking?', options: ['SaaS', 'PaaS', 'IaaS', 'DBaaS'], answer: 'IaaS', category: 'Cloud', difficulty: 'easy', explanation: 'Infrastructure as a Service (IaaS) provides virtualized computing resources over the cloud (e.g., AWS EC2, Azure VMs).' },
-  { id: 12, question: 'Which Git command creates a local working copy of a remote repository?', options: ['git clone', 'git push', 'git merge', 'git diff'], answer: 'git clone', category: 'DevOps', difficulty: 'easy', explanation: 'git clone copies an existing repository, including all history and branches, to a new directory.' },
-  { id: 13, question: 'Which layer of the OSI 7-layer model handles packet addressing and logical routing?', options: ['Data Link', 'Network', 'Session', 'Presentation'], answer: 'Network', category: 'Networking', difficulty: 'medium', explanation: 'Layer 3 (Network Layer) is responsible for packet forwarding, routing through intermediate routers, and IP addressing.' },
-  { id: 14, question: 'Which standard Python built-in sequence type is immutable after creation?', options: ['List', 'Dictionary', 'Set', 'Tuple'], answer: 'Tuple', category: 'Python', difficulty: 'easy', explanation: 'Tuples are immutable sequence types in Python; once assigned, their elements cannot be changed or appended.' },
-  { id: 15, question: 'Which comparison sort algorithm has a guaranteed average and worst-case O(n log n) time complexity?', options: ['Bubble Sort', 'Merge Sort', 'Linear Search', 'Counting Sort'], answer: 'Merge Sort', category: 'Algorithms', difficulty: 'medium', explanation: 'Merge Sort divides arrays into halves and merges them, maintaining O(n log n) running time across best, average, and worst cases.' },
-  { id: 16, question: 'What does the abbreviation API stand for in software development?', options: ['Application Programming Interface', 'Advanced Program Internet', 'Application Process Integration', 'Automated Protocol Interface'], answer: 'Application Programming Interface', category: 'Software', difficulty: 'easy', explanation: 'An Application Programming Interface defines rules and protocols enabling software applications to communicate.' },
-  { id: 17, question: 'Which NoSQL database engine stores semi-structured data as BSON documents?', options: ['MongoDB', 'MySQL', 'PostgreSQL', 'Oracle'], answer: 'MongoDB', category: 'DBMS', difficulty: 'easy', explanation: 'MongoDB is a document-oriented database using JSON-like BSON documents with dynamic schemas.' },
-  { id: 18, question: 'Which container runtime and packaging tool isolates applications inside lightweight containers?', options: ['Docker', 'Jenkins', 'Nginx', 'Gradle'], answer: 'Docker', category: 'DevOps', difficulty: 'easy', explanation: 'Docker packages an application and its dependencies into a container image that runs uniformly across environments.' },
-  { id: 19, question: 'Which Java standard collection class stores associations between unique keys and values?', options: ['ArrayList', 'HashMap', 'Stack', 'PriorityQueue'], answer: 'HashMap', category: 'Java', difficulty: 'easy', explanation: 'HashMap provides a hash-table based implementation of the Map interface for key-value pair lookups in O(1) average time.' },
-  { id: 20, question: 'Which security protocol operates over TLS to secure HTTP communications on port 443?', options: ['HTTPS', 'Telnet', 'FTP', 'ARP'], answer: 'HTTPS', category: 'Networking', difficulty: 'easy', explanation: 'Hypertext Transfer Protocol Secure (HTTPS) encrypts communication between the client and server using TLS/SSL.' },
-  { id: 21, question: 'Which supervised machine learning task models and predicts a continuous real numeric value?', options: ['Classification', 'Regression', 'Clustering', 'Association'], answer: 'Regression', category: 'Machine Learning', difficulty: 'medium', explanation: 'Regression algorithms forecast continuous output quantities (such as temperature, price, or time), whereas classification predicts discrete classes.' },
-  { id: 22, question: 'Which balanced tree data structure is widely utilized for database indexing on disk storage?', options: ['B-Tree', 'Linked List', 'Stack', 'Min-Heap'], answer: 'B-Tree', category: 'DBMS', difficulty: 'medium', explanation: 'B-Trees and B+ Trees keep keys sorted and balance node size to align with storage block/page reads for fast indexing.' },
-  { id: 23, question: 'Which standard UNIX/Linux shell command lists files and subdirectories?', options: ['ls', 'cd', 'pwdx', 'touchx'], answer: 'ls', category: 'Operating Systems', difficulty: 'easy', explanation: 'The ls command lists directory contents, filenames, and attributes in POSIX operating systems.' },
-  { id: 24, question: 'Which high-speed hardware memory subsystem buffers frequently used data near the CPU core?', options: ['Cache', 'Compiler', 'Router', 'Parser'], answer: 'Cache', category: 'Computer Architecture', difficulty: 'easy', explanation: 'CPU cache (L1/L2/L3) is fast static RAM situated on the processor die to minimize latency from main memory (DRAM).' },
-  { id: 25, question: 'Which React hook is standardly used to declare and update local state variables in a function component?', options: ['useState', 'useRoute', 'useNode', 'useClass'], answer: 'useState', category: 'React', difficulty: 'easy', explanation: 'useState declares a state variable and gives components an updater function that triggers re-renders on mutation.' }
+  { id: 1, question: 'Two fair dice are rolled. What is the probability that their sum is 7?', options: ['1/12', '1/9', '5/36', '⅙'], answer: '⅙', category: 'Aptitude / Probability', difficulty: 'easy', explanation: 'There are 6 combinations summing to 7: (1,6), (2,5), (3,4), (4,3), (5,2), (6,1) out of 36 total outcomes. Probability = 6/36 = 1/6 (⅙).' },
+  { id: 2, question: 'Which component is known as the "Brain of the Computer"?', options: ['RAM', 'CPU', 'Hard Disk', 'Motherboard'], answer: 'CPU', category: 'Computer Architecture', difficulty: 'easy', explanation: 'The Central Processing Unit (CPU) executes program instructions and coordinates computer operations.' },
+  { id: 3, question: 'What is the output of the following C code?\n\nint x = 5;\nprintf("%d", x > 3 ? 1 : 2);', options: ['1', '2', '5', '3'], answer: '1', category: 'C Programming', difficulty: 'easy', explanation: 'Since x is 5 and (5 > 3) is true (1), the ternary operator returns 1.' },
+  { id: 4, question: 'If you receive a suspicious email asking for your password, what should you do?', options: ['Reply with password', 'Click the link', 'Ignore and report it', 'Forward to friends'], answer: 'Ignore and report it', category: 'Cybersecurity', difficulty: 'easy', explanation: 'Suspicious requests for credentials are phishing attempts; ignore and report them immediately.' },
+  { id: 5, question: 'Which of the following is NOT true about AI hallucinations?', options: ['They are always real', 'They can sound confident', 'They can be incorrect', 'They happen in LLMs'], answer: 'They are always real', category: 'Artificial Intelligence', difficulty: 'easy', explanation: 'AI hallucinations produce confident but factually incorrect or fabricated claims; they are not real.' },
+  { id: 6, question: 'Which SQL function returns the total number of rows in a table?', options: ['TOTAL()', 'COUNT(*)', 'SUM()', 'ROWS()'], answer: 'COUNT(*)', category: 'DBMS / SQL', difficulty: 'easy', explanation: 'COUNT(*) calculates the total number of rows in a table, including rows containing NULLs.' },
+  { id: 7, question: 'What is the SI unit of Electric Current?', options: ['Volt', 'Watt', 'Ampere', 'Ohm'], answer: 'Ampere', category: 'Physics / Electronics', difficulty: 'easy', explanation: 'The SI base unit of electric current is the Ampere (A).' },
+  { id: 8, question: 'What mechanism enables Transformer models (like ChatGPT) to understand relationships between words in a sentence?', options: ['Convolution', 'Self-attention', 'Gradient descent', 'Backpropagation'], answer: 'Self-attention', category: 'Artificial Intelligence', difficulty: 'medium', explanation: 'Self-attention calculates mutual influence weights across all words in a sequence simultaneously.' },
+  { id: 9, question: 'Find the next number in the series: 3, 5, 7, 9, ___', options: ['10', '11', '12', '13'], answer: '11', category: 'Aptitude / Series', difficulty: 'easy', explanation: 'The series increments by 2 with consecutive odd numbers: 3, 5, 7, 9, 11.' },
+  { id: 10, question: 'Which software is used to protect a computer from malicious attacks?', options: ['Compiler', 'Antivirus', 'Browser', 'Operating System'], answer: 'Antivirus', category: 'Cybersecurity', difficulty: 'easy', explanation: 'Antivirus software detects, neutralizes, and removes malicious code such as viruses and ransomware.' },
+  { id: 11, question: 'Which simple machine is used to lift water from a well?', options: ['Pulley', 'Lever', 'Inclined Plane', 'Wedge'], answer: 'Pulley', category: 'Physics / Mechanics', difficulty: 'easy', explanation: 'A pulley redirects pulling force, facilitating lifting water buckets from a deep well.' },
+  { id: 12, question: 'Which component stores data temporarily while running programs?', options: ['Hard Disk', 'ROM', 'RAM', 'SSD'], answer: 'RAM', category: 'Computer Architecture', difficulty: 'easy', explanation: 'RAM (Random Access Memory) provides high-speed volatile storage for currently executing processes.' },
+  { id: 13, question: 'Which device connects multiple computer networks and directs traffic?', options: ['Switch', 'Router', 'Hub', 'Modem'], answer: 'Router', category: 'Networking', difficulty: 'easy', explanation: 'A router directs packets at Layer 3 between distinct IP networks and subnets.' },
+  { id: 14, question: 'What does IoT stand for?', options: ['Internet of Technology', 'Internal of Things', 'Internet of Things', 'Integrated of Technology'], answer: 'Internet of Things', category: 'IoT', difficulty: 'easy', explanation: 'IoT stands for "Internet of Things" — interconnected physical devices communicating over the internet.' },
+  { id: 15, question: 'Which keyword is used to allocate memory dynamically in C++?', options: ['malloc', 'new', 'create', 'alloc'], answer: 'new', category: 'C++ Programming', difficulty: 'easy', explanation: 'In C++, the new operator dynamically allocates memory on the free store (heap) and initializes objects.' },
+  { id: 16, question: 'Which SQL command is used to read/retrieve data from a database?', options: ['GET', 'FETCH', 'SELECT', 'RETRIEVE'], answer: 'SELECT', category: 'DBMS / SQL', difficulty: 'easy', explanation: 'The SELECT command queries and retrieves rows from one or more database tables.' },
+  { id: 17, question: 'Which field in the IPv4 header prevents packets from circulating indefinitely in a network?', options: ['Checksum', 'TTL', 'TOS', 'MTU'], answer: 'TTL', category: 'Networking', difficulty: 'medium', explanation: 'Time-To-Live (TTL) is decremented at each hop; when it reaches 0, the packet is dropped.' },
+  { id: 18, question: 'Which metric balances Precision and Recall in machine learning evaluation?', options: ['Accuracy', 'ROC-AUC', 'F1-score', 'Mean Squared Error'], answer: 'F1-score', category: 'Machine Learning', difficulty: 'medium', explanation: 'The F1-score is the harmonic mean of precision and recall: 2 * (P * R) / (P + R).' },
+  { id: 19, question: 'If CLOCK is coded as 5, what is the code for WATCHMAN?', options: ['6', '7', '8', '9'], answer: '8', category: 'Aptitude / Reasoning', difficulty: 'easy', explanation: 'The code corresponds to the number of letters: CLOCK has 5 letters, and WATCHMAN has 8 letters.' },
+  { id: 20, question: 'Which sensor is used to measure temperature?', options: ['Ultrasonic sensor', 'Thermometer', 'LDR sensor', 'PIR sensor'], answer: 'Thermometer', category: 'Sensors / Electronics', difficulty: 'easy', explanation: 'A thermometer (or digital thermal sensor) measures temperature.' },
+  { id: 21, question: 'In Java, which keyword is used to prevent method overriding?', options: ['static', 'const', 'final', 'abstract'], answer: 'final', category: 'Java', difficulty: 'easy', explanation: 'In Java, declaring a method with final prevents any subclass from overriding it.' },
+  { id: 22, question: 'What type of service is Google Drive?', options: ['Cloud storage', 'Operating System', 'Search Engine', 'Antivirus'], answer: 'Cloud storage', category: 'Cloud Computing', difficulty: 'easy', explanation: 'Google Drive is a cloud-based file storage and synchronization service.' },
+  { id: 23, question: 'Which algorithm is best suited to find the shortest path in a graph with negative edge weights (and detect negative cycles)?', options: ["Dijkstra's algorithm", "Prim's algorithm", 'Bellman–Ford', "Kruskal's algorithm"], answer: 'Bellman–Ford', category: 'Algorithms', difficulty: 'medium', explanation: 'The Bellman–Ford algorithm computes shortest paths on graphs with negative edge weights and identifies negative cycles.' },
+  { id: 24, question: 'What is the result of 1.1 + 2.3 in floating-point arithmetic?', options: ['3.3', '3.5', '3.2', '3.4'], answer: '3.4', category: 'Computer Arithmetic', difficulty: 'easy', explanation: '1.1 + 2.3 evaluates to 3.4 in standard floating-point addition.' },
+  { id: 25, question: 'What is the output of the following Python code?\n\nx = [1, 2, 3]\nprint(len(x) * 3 + 1)', options: ['7', '10', '9', '12'], answer: '10', category: 'Python Programming', difficulty: 'easy', explanation: 'len(x) is 3; multiplication takes precedence over addition: 3 * 3 + 1 = 9 + 1 = 10.' },
+  { id: 26, question: 'Which type of energy is generated using sunlight?', options: ['Wind energy', 'Thermal energy', 'Solar energy', 'Hydro energy'], answer: 'Solar energy', category: 'General Science', difficulty: 'easy', explanation: 'Solar energy is harnessed directly from sunlight using solar panels.' },
+  { id: 27, question: 'Which technology is used for short-range contactless data transfer (like mobile payments)?', options: ['GPS', 'NFC', '4G', 'Satellite'], answer: 'NFC', category: 'Networking / IoT', difficulty: 'easy', explanation: 'Near Field Communication (NFC) enables short-range contactless communication for payments and credentials.' },
+  { id: 28, question: 'In an automated greenhouse, which sensor maintains optimal climate conditions?', options: ['Proximity sensor', 'Gyroscope', 'Temperature sensor', 'Magnetometer'], answer: 'Temperature sensor', category: 'Sensors / Automation', difficulty: 'easy', explanation: 'A temperature sensor monitors climate parameters to trigger heating, ventilation, and cooling.' },
+  { id: 29, question: 'What is the value of: 5 + 5 × 5?', options: ['50', '25', '30', '35'], answer: '30', category: 'Aptitude / Math', difficulty: 'easy', explanation: 'Multiplication takes precedence over addition: 5 + (5 × 5) = 5 + 25 = 30.' },
+  { id: 30, question: 'What is the main purpose of multi-factor authentication (MFA)?', options: ['Speed up login', 'Add another layer of account security', 'Reset forgotten passwords', 'Remove passwords'], answer: 'Add another layer of account security', category: 'Cybersecurity', difficulty: 'easy', explanation: 'Multi-Factor Authentication (MFA) requires multiple distinct factors, providing extra layers of defense.' }
 ];
 
 // Server Authoritative Configuration & State
 const config = {
   bidChoices: [2, 4, 6, 9, 10, 13, 15],
   passPenalty: 5, // magnitude: deductions are -passPenalty
+  pendingPassPenalty: null, // if set, activates on next question start
   biddingTime: 15,
   answerTime: 10,
   rulesLocked: false // Locked once tournament starts
@@ -79,13 +87,17 @@ let state = {
   
   // Results of the current question
   currentQuestionResult: null, // { questionId, outcome: 'answered'|'unresolved'|'no_bids', correctTeam, correctAnswer, log: [] }
-  roundResults: [] // historic results log
+  roundResults: [], // historic results log
+
+  // Completion sequence timestamp
+  finishedAt: null
 };
 
 // Recovery persistence helper
 function persistTournamentState() {
   try {
     const dataToSave = {
+      bankVersion: CURRENT_BANK_VERSION,
       config,
       questions,
       teams: [...teams.values()].map(t => ({
@@ -113,7 +125,8 @@ function persistTournamentState() {
         activeQueueIndex: state.activeQueueIndex,
         activeBidder: state.activeBidder,
         currentQuestionResult: state.currentQuestionResult,
-        roundResults: state.roundResults
+        roundResults: state.roundResults,
+        finishedAt: state.finishedAt
       }
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(dataToSave, null, 2), 'utf-8');
@@ -128,8 +141,12 @@ function loadTournamentState() {
       const content = fs.readFileSync(STATE_FILE, 'utf-8');
       const saved = JSON.parse(content);
       if (saved.config) Object.assign(config, saved.config);
-      if (Array.isArray(saved.questions) && saved.questions.length === TOTAL_QUESTIONS) {
+      if (saved.bankVersion === CURRENT_BANK_VERSION && Array.isArray(saved.questions) && saved.questions.length >= 30) {
         questions = saved.questions;
+      } else {
+        questions = JSON.parse(JSON.stringify(defaultQuestions));
+        console.log(`Loaded official default question bank (${questions.length} questions, version: ${CURRENT_BANK_VERSION}).`);
+        persistTournamentState();
       }
       if (Array.isArray(saved.teams)) {
         teams.clear();
@@ -156,8 +173,12 @@ function loadTournamentState() {
         state.activeBidder = saved.state.activeBidder || null;
         state.currentQuestionResult = saved.state.currentQuestionResult || null;
         state.roundResults = saved.state.roundResults || [];
+        state.finishedAt = saved.state.finishedAt || null;
       }
       console.log('Restored tournament state successfully from backup.');
+    } else {
+      persistTournamentState();
+      console.log(`Initialized fresh tournament state file with ${defaultQuestions.length} official questions.`);
     }
   } catch (err) {
     console.error('Error loading tournament state, using fresh state:', err.message);
@@ -175,7 +196,7 @@ const publicQuestion = (q, qIndex) => {
   return {
     id: q.id,
     questionNumber: (qIndex >= 0 ? qIndex : state.questionIndex) + 1,
-    totalQuestions: TOTAL_QUESTIONS,
+    totalQuestions: questions.length,
     question: q.question,
     category: q.category,
     difficulty: q.difficulty,
@@ -211,7 +232,8 @@ const emitTimer = (time, totalTime) => {
 
 // Complete Admin Snapshot
 const snapshot = () => {
-  const currentQ = (state.questionIndex >= 0 && state.questionIndex < TOTAL_QUESTIONS)
+  const total = questions.length;
+  const currentQ = (state.questionIndex >= 0 && state.questionIndex < total)
     ? questions[state.questionIndex]
     : null;
 
@@ -222,6 +244,7 @@ const snapshot = () => {
     config: {
       bidChoices: config.bidChoices,
       passPenalty: config.passPenalty,
+      pendingPassPenalty: config.pendingPassPenalty,
       biddingTime: config.biddingTime,
       answerTime: config.answerTime
     },
@@ -232,7 +255,7 @@ const snapshot = () => {
       explanation: currentQ.explanation
     } : null,
     questionNumber: state.questionIndex + 1,
-    totalQuestions: TOTAL_QUESTIONS,
+    totalQuestions: total,
     time: state.currentTime,
     totalTime: state.totalTime,
     teams: [...teams.values()].map(t => ({
@@ -259,7 +282,9 @@ const snapshot = () => {
     })),
     activeBidder: state.activeBidder,
     currentQuestionResult: state.currentQuestionResult,
-    results: state.roundResults
+    results: state.roundResults,
+    finishedAt: state.finishedAt,
+    winner: state.phase === 'finished' ? ([...teams.values()].map(t => ({ id: t.id, name: t.name, points: t.points })).sort((a, b) => b.points - a.points)[0] || null) : null
   };
 };
 
@@ -272,13 +297,23 @@ function updatePlayerView(teamId) {
   const t = teams.get(teamId);
   if (!t || !t.socketId) return;
 
-  const currentQ = (state.questionIndex >= 0 && state.questionIndex < TOTAL_QUESTIONS)
+  const currentQ = (state.questionIndex >= 0 && state.questionIndex < questions.length)
     ? questions[state.questionIndex]
     : null;
 
   const userBid = state.bids.get(teamId);
   const userPassed = state.passes.has(teamId);
   const isSelectedActive = state.activeBidder && state.activeBidder.teamId === teamId;
+
+  let topWinner = null;
+  let topLeaderboard = null;
+  if (state.phase === 'finished') {
+    const sortedStandings = [...teams.values()]
+      .map(tm => ({ id: tm.id, name: tm.name, points: tm.points }))
+      .sort((a, b) => b.points - a.points);
+    topWinner = sortedStandings.length > 0 ? sortedStandings[0] : null;
+    topLeaderboard = sortedStandings.slice(0, 5);
+  }
 
   io.to(t.socketId).emit('player:sync', {
     team: payload(t),
@@ -295,7 +330,10 @@ function updatePlayerView(teamId) {
     config: {
       bidChoices: config.bidChoices,
       passPenalty: config.passPenalty
-    }
+    },
+    finishedAt: state.finishedAt,
+    winner: topWinner,
+    leaderboard: topLeaderboard
   });
 }
 
@@ -315,14 +353,22 @@ function proceedToNextQuestion() {
   clearTimer();
 
   const nextIndex = state.questionIndex + 1;
-  if (nextIndex >= TOTAL_QUESTIONS) {
+  if (nextIndex >= questions.length) {
     state.phase = 'finished';
+    state.finishedAt = state.finishedAt || Date.now();
     state.activeBidder = null;
     state.answerQueue = [];
     state.bids.clear();
     state.passes.clear();
     persistTournamentState();
-    io.emit('event:finished');
+    const sortedStandings = [...teams.values()]
+      .map(tm => ({ id: tm.id, name: tm.name, points: tm.points }))
+      .sort((a, b) => b.points - a.points);
+    io.emit('event:finished', {
+      finishedAt: state.finishedAt,
+      winner: sortedStandings[0] || null,
+      leaderboard: sortedStandings
+    });
     broadcastPlayerViews();
     emitSnapshot();
     return;
@@ -331,10 +377,17 @@ function proceedToNextQuestion() {
   startRound(nextIndex);
 }
 
-// Start round for question index
+// Start round for question index — applies pendingPassPenalty atomically
 function startRound(index) {
   clearTimer();
   config.rulesLocked = true;
+
+  // Apply any pending PASS penalty change at the boundary between rounds
+  if (config.pendingPassPenalty !== null) {
+    config.passPenalty = config.pendingPassPenalty;
+    config.pendingPassPenalty = null;
+  }
+
   state.questionIndex = index;
   state.phase = 'bidding';
   state.bids.clear();
@@ -656,6 +709,21 @@ io.on('connection', socket => {
     emitSnapshot();
   });
 
+// Mathematical and text equivalence helper (handles Unicode fraction characters and equivalent fraction strings)
+function areAnswersEquivalent(a, b) {
+  if (a == null || b == null) return false;
+  const strA = String(a).trim();
+  const strB = String(b).trim();
+  if (strA === strB) return true;
+  const norm = s => s.replace(/\u2159/g, '1/6')
+                     .replace(/\u00BD/g, '1/2')
+                     .replace(/\u2153/g, '1/3')
+                     .replace(/\u00BC/g, '1/4')
+                     .replace(/\u00BE/g, '3/4')
+                     .replace(/\s+/g, '');
+  return norm(strA) === norm(strB);
+}
+
   // Team Answer Submission
   socket.on('team:answer', chosenOption => {
     const teamId = socketTeams.get(socket.id);
@@ -670,7 +738,7 @@ io.on('connection', socket => {
     clearTimer();
     const q = questions[state.questionIndex];
     const bidAmount = state.activeBidder.bid;
-    const isCorrect = String(chosenOption).trim() === String(q.answer).trim();
+    const isCorrect = areAnswersEquivalent(chosenOption, q.answer);
 
     if (isCorrect) {
       // Correct! +bid, question ends
@@ -843,7 +911,7 @@ io.on('connection', socket => {
 
   // Restart Current Question
   socket.on('admin:restart_current_question', requireAdmin(() => {
-    if (state.questionIndex >= 0 && state.questionIndex < TOTAL_QUESTIONS) {
+    if (state.questionIndex >= 0 && state.questionIndex < questions.length) {
       clearTimer();
       state.isPaused = false;
       startRound(state.questionIndex);
@@ -854,11 +922,19 @@ io.on('connection', socket => {
   socket.on('admin:end_tournament', requireAdmin(() => {
     clearTimer();
     state.phase = 'finished';
+    state.finishedAt = state.finishedAt || Date.now();
     state.isPaused = false;
     state.activeBidder = null;
     state.answerQueue = [];
     persistTournamentState();
-    io.emit('event:finished');
+    const sortedStandings = [...teams.values()]
+      .map(tm => ({ id: tm.id, name: tm.name, points: tm.points }))
+      .sort((a, b) => b.points - a.points);
+    io.emit('event:finished', {
+      finishedAt: state.finishedAt,
+      winner: sortedStandings[0] || null,
+      leaderboard: sortedStandings
+    });
     broadcastPlayerViews();
     emitSnapshot();
   }));
@@ -874,6 +950,7 @@ io.on('connection', socket => {
       t.locked = false;
     }
     state.phase = 'waiting';
+    state.finishedAt = null;
     state.isPaused = false;
     state.pausedPhase = null;
     state.pausedTimerRemaining = 0;
@@ -894,10 +971,10 @@ io.on('connection', socket => {
     emitSnapshot();
   }));
 
-  // Rule Configuration Updates (Bid Choices, PASS penalty, Timers)
+  // Rule Configuration Updates (Bid Choices, Timers — pre-tournament only)
   socket.on('admin:update_rules', requireAdmin(rules => {
     if (config.rulesLocked) {
-      return socket.emit('admin:error', 'Rules are locked after the competition begins. Reset to reconfigure.');
+      return socket.emit('admin:error', 'Rules are locked after the competition begins. Use the live PASS penalty control to adjust the penalty mid-tournament.');
     }
     if (Array.isArray(rules.bidChoices) && rules.bidChoices.length > 0) {
       const cleanChoices = rules.bidChoices
@@ -920,6 +997,32 @@ io.on('connection', socket => {
     broadcastPlayerViews();
     emitSnapshot();
     socket.emit('admin:notification', 'Competition rules updated successfully.');
+  }));
+
+  // LIVE PASS PENALTY CHANGE — allowed at any time, including during active competition.
+  // If tournament is running, the new value is queued as pendingPassPenalty and activates
+  // atomically at the START of the next question. The current question is unaffected.
+  // If tournament hasn't started yet, applies immediately.
+  socket.on('admin:update_pass_penalty', requireAdmin(({ passPenalty }) => {
+    const newPenalty = Number(passPenalty);
+    if (!Number.isInteger(newPenalty) || newPenalty < 0) {
+      return socket.emit('admin:error', 'Invalid PASS penalty value. Must be a non-negative integer.');
+    }
+    if (!config.rulesLocked) {
+      // Pre-tournament: apply immediately
+      config.passPenalty = newPenalty;
+      config.pendingPassPenalty = null;
+      persistTournamentState();
+      broadcastPlayerViews();
+      emitSnapshot();
+      socket.emit('admin:notification', `PASS penalty updated to −${newPenalty} pts (applied immediately).`);
+    } else {
+      // Live tournament: schedule for next round
+      config.pendingPassPenalty = newPenalty;
+      persistTournamentState();
+      emitSnapshot();
+      socket.emit('admin:notification', `PASS penalty scheduled: −${newPenalty} pts will activate from the next question.`);
+    }
   }));
 
   // QUESTION MANAGER: Update individual question
@@ -948,7 +1051,54 @@ io.on('connection', socket => {
 
     persistTournamentState();
     emitSnapshot();
-    socket.emit('admin:notification', `Question ${questionId} updated.`);
+    socket.emit('admin:notification', `Question updated successfully.`);
+  }));
+
+  // QUESTION MANAGER: Add new question
+  socket.on('admin:add_question', requireAdmin(newQ => {
+    if (!newQ || !String(newQ.question || '').trim()) {
+      return socket.emit('admin:error', 'Question text is required.');
+    }
+    if (!Array.isArray(newQ.options) || newQ.options.length < 2) {
+      return socket.emit('admin:error', 'At least 2 answer options are required.');
+    }
+    if (!newQ.answer || !newQ.options.includes(newQ.answer)) {
+      return socket.emit('admin:error', 'Correct answer must be one of the provided options.');
+    }
+
+    const maxId = questions.reduce((m, q) => Math.max(m, q.id || 0), 0);
+    const q = {
+      id: maxId + 1,
+      question: String(newQ.question).trim(),
+      options: newQ.options.map(s => String(s).trim()),
+      answer: String(newQ.answer).trim(),
+      category: String(newQ.category || 'General').trim(),
+      difficulty: ['easy', 'medium', 'hard'].includes(newQ.difficulty) ? newQ.difficulty : 'easy',
+      explanation: String(newQ.explanation || '').trim()
+    };
+
+    questions.push(q);
+    persistTournamentState();
+    emitSnapshot();
+    socket.emit('admin:notification', `Question Q${questions.length} added. Bank now has ${questions.length} questions.`);
+  }));
+
+  // QUESTION MANAGER: Delete question (only upcoming questions, not current/completed)
+  socket.on('admin:delete_question', requireAdmin(({ questionId }) => {
+    const idx = questions.findIndex(q => q.id === questionId);
+    if (idx === -1) return socket.emit('admin:error', 'Question not found.');
+
+    if (questions.length <= 1) {
+      return socket.emit('admin:error', 'Cannot delete: question bank must have at least 1 question.');
+    }
+    if (config.rulesLocked && idx <= state.questionIndex) {
+      return socket.emit('admin:error', 'Cannot delete current or already-played questions during a live competition.');
+    }
+
+    const deleted = questions.splice(idx, 1)[0];
+    persistTournamentState();
+    emitSnapshot();
+    socket.emit('admin:notification', `Question "${deleted.question.substring(0, 40)}..." deleted. Bank now has ${questions.length} questions.`);
   }));
 
   // QUESTION MANAGER: Reorder questions
@@ -1046,7 +1196,9 @@ app.get('/api/health', (_, res) => res.json({
   isPaused: state.isPaused,
   teams: teams.size,
   question: state.questionIndex + 1,
-  totalQuestions: TOTAL_QUESTIONS
+  totalQuestions: questions.length,
+  memory: process.memoryUsage(),
+  uptime: process.uptime()
 }));
 
 app.get('/api/config', (_, res) => res.json({
@@ -1055,8 +1207,16 @@ app.get('/api/config', (_, res) => res.json({
   startingScore: 100
 }));
 
+app.use(express.static(path.join(rootDir, 'public')));
 app.use(express.static(distDir));
-app.use((_, res) => res.sendFile(path.join(distDir, 'index.html')));
+app.use((_, res) => {
+  const indexPath = path.join(distDir, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.status(200).send('BIDNEX V2 Engine active. Run build to generate frontend.');
+  }
+});
 
 server.listen(PORT, () => {
   console.log(`BIDNEX V2 Engine active on port ${PORT}`);

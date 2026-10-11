@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 
 const getSocketUrl = () => {
@@ -26,7 +26,10 @@ export default function Participant() {
     isActiveBidder: false,
     answerOptions: null,
     result: null,
-    config: { bidChoices: [2, 4, 6, 9, 10, 13, 15], passPenalty: 5 }
+    config: { bidChoices: [2, 4, 6, 9, 10, 13, 15], passPenalty: 5 },
+    finishedAt: null,
+    winner: null,
+    leaderboard: null
   });
 
   const [selectedBid, setSelectedBid] = useState(null);
@@ -35,6 +38,13 @@ export default function Participant() {
   const [feedback, setFeedback] = useState(null);
   const [violationNotice, setViolationNotice] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
+
+  // Cinematic Ending Video State
+  const [videoStage, setVideoStage] = useState('initial'); // 'initial', 'video', 'final', 'error'
+  const [isMuted, setIsMuted] = useState(true);
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  const videoRef = useRef(null);
+  const hasPlayedVideoRef = useRef(false);
 
   // 18. Tab Switch & Window Focus Anti-Cheating Detection
   useEffect(() => {
@@ -110,7 +120,10 @@ export default function Participant() {
         isActiveBidder: data.isActiveBidder,
         answerOptions: data.answerOptions,
         result: data.result,
-        config: data.config || prev.config
+        config: data.config || prev.config,
+        finishedAt: data.finishedAt || prev.finishedAt,
+        winner: data.winner !== undefined ? data.winner : prev.winner,
+        leaderboard: data.leaderboard || prev.leaderboard
       }));
 
       // Reset local answer locks on round change
@@ -119,6 +132,16 @@ export default function Participant() {
         setSelectedOption(null);
         setFeedback(null);
       }
+    });
+
+    socket.on('event:finished', (data) => {
+      setSyncData(prev => ({
+        ...prev,
+        phase: 'finished',
+        finishedAt: (data && data.finishedAt) ? data.finishedAt : (prev.finishedAt || Date.now()),
+        winner: (data && data.winner) ? data.winner : prev.winner,
+        leaderboard: (data && data.leaderboard) ? data.leaderboard : prev.leaderboard
+      }));
     });
 
     socket.on('timer', ({ time, totalTime, isPaused }) => {
@@ -157,6 +180,9 @@ export default function Participant() {
       setSelectedBid(null);
       setFeedback(null);
       setErrorMessage('');
+      setVideoStage('initial');
+      setAutoplayBlocked(false);
+      hasPlayedVideoRef.current = false;
       localStorage.removeItem('bidnex_token');
     });
 
@@ -172,6 +198,7 @@ export default function Participant() {
       socket.off('bid:error');
       socket.off('player:error');
       socket.off('player:sync');
+      socket.off('event:finished');
       socket.off('timer');
       socket.off('bid:locked');
       socket.off('pass:confirmed');
@@ -202,6 +229,54 @@ export default function Participant() {
     setSelectedOption(opt);
     setAnswerLocked(true);
     socket.emit('team:answer', opt);
+  };
+
+  // Ending Video Orchestration: 5s delay -> Full-screen video -> Final state
+  useEffect(() => {
+    if (syncData.phase !== 'finished') {
+      setVideoStage('initial');
+      hasPlayedVideoRef.current = false;
+      return;
+    }
+
+    if (hasPlayedVideoRef.current) {
+      setVideoStage('final');
+      return;
+    }
+
+    const finishedAt = syncData.finishedAt || Date.now();
+    const elapsed = Date.now() - finishedAt;
+    const remaining = Math.max(0, 5000 - elapsed);
+
+    const timer = setTimeout(() => {
+      setVideoStage(prev => (prev === 'initial' ? 'video' : prev));
+    }, remaining);
+
+    return () => clearTimeout(timer);
+  }, [syncData.phase, syncData.finishedAt]);
+
+  // Handle Autoplay & Playback when entering video stage
+  useEffect(() => {
+    if (videoStage === 'video' && videoRef.current) {
+      videoRef.current.currentTime = 0;
+      const playPromise = videoRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.warn('Browser autoplay prevented video playback:', err);
+          setAutoplayBlocked(true);
+        });
+      }
+    }
+  }, [videoStage]);
+
+  const handleVideoEnded = () => {
+    hasPlayedVideoRef.current = true;
+    setVideoStage('final');
+  };
+
+  const handleVideoError = (e) => {
+    console.warn('Ending video failed to load, falling back to competition screen:', e);
+    setVideoStage('error');
   };
 
   // Registration Screen — Glassmorphism + Poster
@@ -263,27 +338,204 @@ export default function Participant() {
     );
   }
 
-  // Final Results Screen
+  // Competition Finished Views — 3-Stage Orchestration
   if (syncData.phase === 'finished') {
-    return (
-      <div className="player-shell">
-        <header className="player-topbar">
-          <div className="player-brand-badge">
-            <span className="brand-dot" /> BIDNEX
+    const winner = syncData.winner;
+    const isWinner = winner && (winner.id === team.id || winner.name === team.name);
+
+    // Stage 1 & Fallback: Initial 5s Screen or Fallback on Video Load Error
+    if (videoStage === 'initial' || videoStage === 'error') {
+      return (
+        <div className="player-shell ending-fade-in">
+          <header className="player-topbar">
+            <div className="player-brand-badge">
+              <span className="brand-dot" /> BIDNEX
+            </div>
+            <div className="player-team-pill">{team.name}</div>
+          </header>
+          <main className="player-content" style={{ textAlign: 'center', padding: '60px 20px' }}>
+            <h1 style={{ fontSize: 44, fontWeight: 950, color: 'var(--neon-green)', letterSpacing: '0.1em' }}>COMPETITION COMPLETED</h1>
+            <p style={{ color: 'var(--text-sub)', marginTop: 8, fontSize: 16 }}>Final tournament standings recorded.</p>
+            <div style={{ margin: '40px auto', background: 'var(--surface-metallic)', border: '1px solid var(--border-glass)', borderRadius: 24, padding: '40px 20px', maxWidth: 440 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.15em', color: 'var(--text-dim)', marginBottom: 8 }}>FINAL SCORE</div>
+              <div style={{ fontSize: 64, fontWeight: 950, fontFamily: 'var(--font-mono)', color: 'var(--neon-green)' }}>{team.points}</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 14, marginTop: 10 }}>Team: <strong>{team.name}</strong></div>
+            </div>
+            {videoStage === 'initial' && (
+              <div className="ending-transition-pill">
+                <span className="ending-pulse-dot" /> PREPARING CINEMATIC FINALE...
+              </div>
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    // Stage 2: Full-Viewport Background Cinematic Video
+    if (videoStage === 'video') {
+      return (
+        <div className="ending-video-viewport ending-fade-in">
+          <video
+            ref={videoRef}
+            src="/ending-video.mp4"
+            autoPlay
+            muted={isMuted}
+            playsInline
+            loop={false}
+            onEnded={handleVideoEnded}
+            onError={handleVideoError}
+            className="ending-video-bg"
+          />
+          <div className="ending-video-scrim" />
+
+          {/* Floating Top Controls / Brand */}
+          <div className="ending-top-overlay">
+            <div className="player-brand-badge" style={{ background: 'rgba(7, 22, 13, 0.75)', backdropFilter: 'blur(12px)' }}>
+              <span className="brand-dot" /> BIDNEX 2K26
+            </div>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <div className="player-team-pill" style={{ background: 'rgba(7, 22, 13, 0.75)', backdropFilter: 'blur(12px)' }}>
+                {team.name}
+              </div>
+              <button
+                type="button"
+                className="ending-audio-toggle"
+                onClick={() => {
+                  if (videoRef.current) {
+                    videoRef.current.muted = !isMuted;
+                    setIsMuted(!isMuted);
+                  }
+                }}
+                title={isMuted ? 'Unmute video audio' : 'Mute video audio'}
+              >
+                {isMuted ? '🔊 UNMUTE' : '🔇 MUTED'}
+              </button>
+            </div>
           </div>
-          <div className="player-team-pill">{team.name}</div>
-        </header>
-        <main className="player-content" style={{ textAlign: 'center', padding: '60px 20px' }}>
-          <h1 style={{ fontSize: 44, fontWeight: 950, color: 'var(--neon-green)', letterSpacing: '0.1em' }}>COMPETITION COMPLETED</h1>
-          <p style={{ color: 'var(--text-sub)', marginTop: 8, fontSize: 16 }}>Final tournament standings recorded.</p>
-          <div style={{ margin: '40px auto', background: 'var(--surface-metallic)', border: '1px solid var(--border-glass)', borderRadius: 24, padding: '40px 20px', maxWidth: 440 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.15em', color: 'var(--text-dim)', marginBottom: 8 }}>FINAL SCORE</div>
-            <div style={{ fontSize: 64, fontWeight: 950, fontFamily: 'var(--font-mono)', color: 'var(--neon-green)' }}>{team.points}</div>
-            <div style={{ color: 'var(--text-muted)', fontSize: 14, marginTop: 10 }}>Team: <strong>{team.name}</strong></div>
+
+          {/* Autoplay Blocked Manual Play Button */}
+          {autoplayBlocked && (
+            <div className="ending-blocked-prompt">
+              <button
+                type="button"
+                className="ending-play-trigger-btn"
+                onClick={() => {
+                  if (videoRef.current) {
+                    videoRef.current.play().then(() => setAutoplayBlocked(false)).catch(() => {});
+                  }
+                }}
+              >
+                ▶ PLAY FINALE
+              </button>
+            </div>
+          )}
+
+          {/* Elegant HUD Overlay (Unobtrusive to keep video the primary visual focus) */}
+          <div className="ending-bottom-hud">
+            <div className="ending-hud-card">
+              <div className="ending-hud-meta">
+                <span className="ending-hud-tag">TOURNAMENT FINALE</span>
+                {winner && (
+                  <span className="ending-winner-pill">
+                    🏆 CHAMPION: <strong>{winner.name}</strong> ({winner.points} PTS)
+                  </span>
+                )}
+              </div>
+              <div className="ending-hud-row">
+                <div className="ending-team-info">
+                  <div className="ending-label">YOUR TEAM</div>
+                  <div className="ending-team-name">{team.name}</div>
+                </div>
+                <div className="ending-score-box">
+                  <div className="ending-label">FINAL SCORE</div>
+                  <div className="ending-score-val">
+                    {team.points} <span className="ending-score-pts">PTS</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
-        </main>
-      </div>
-    );
+        </div>
+      );
+    }
+
+    // Stage 3: Polished Final State with Standings and Admin Restart Status
+    if (videoStage === 'final') {
+      return (
+        <div className="player-shell ending-fade-in">
+          <header className="player-topbar">
+            <div className="player-brand-badge">
+              <span className="brand-dot" /> BIDNEX
+            </div>
+            <div className="player-team-pill">{team.name}</div>
+          </header>
+          <main className="player-content" style={{ textAlign: 'center', padding: '40px 20px 60px' }}>
+            <div className="final-stage-badge">
+              <span className="final-badge-dot" /> TOURNAMENT CONCLUDED
+            </div>
+            <h1 style={{ fontSize: 42, fontWeight: 950, color: 'var(--neon-green)', letterSpacing: '0.08em', marginTop: 12 }}>
+              FINAL STANDINGS
+            </h1>
+            <p style={{ color: 'var(--text-sub)', marginTop: 8, fontSize: 15 }}>
+              Competition has concluded. Official final results recorded.
+            </p>
+
+            {/* Winner Celebration Banner */}
+            {winner && (
+              <div className={`final-champion-card ${isWinner ? 'champion-active' : ''}`}>
+                <div className="champion-trophy">🏆</div>
+                <div className="champion-details">
+                  <div className="champion-title">TOURNAMENT CHAMPION</div>
+                  <div className="champion-name">{winner.name}</div>
+                  <div className="champion-pts">{winner.points} POINTS</div>
+                </div>
+              </div>
+            )}
+
+            {/* Team's Official Final Score Card */}
+            <div style={{ margin: '24px auto', background: 'var(--surface-metallic)', border: '1px solid var(--border-glass)', borderRadius: 24, padding: '32px 24px', maxWidth: 440 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.15em', color: 'var(--text-dim)', marginBottom: 8 }}>
+                {team.name.toUpperCase()} FINAL SCORE
+              </div>
+              <div style={{ fontSize: 60, fontWeight: 950, fontFamily: 'var(--font-mono)', color: 'var(--neon-green)' }}>
+                {team.points}
+              </div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 14, marginTop: 10 }}>
+                Status: <strong style={{ color: '#a7f3d0' }}>Final Score Recorded</strong>
+              </div>
+            </div>
+
+            {/* Leaderboard Table if available */}
+            {syncData.leaderboard && syncData.leaderboard.length > 0 && (
+              <div className="final-standings-box">
+                <div className="final-standings-title">OFFICIAL LEADERBOARD</div>
+                <div className="final-standings-table">
+                  {syncData.leaderboard.map((item, idx) => (
+                    <div
+                      key={item.id || item.name}
+                      className={`final-standing-row ${item.name === team.name ? 'is-self' : ''}`}
+                    >
+                      <span className="standing-rank">#{idx + 1}</span>
+                      <span className="standing-name">{item.name}</span>
+                      <span className="standing-pts">{item.points} pts</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Admin-Controlled Restart Option / Status */}
+            <div className="final-admin-note">
+              <div className="final-admin-icon">⚡</div>
+              <div className="final-admin-text">
+                <strong>Admin Controlled Tournament</strong>
+                <span>Waiting for Tournament Administrator to reset the arena for the next round.</span>
+              </div>
+            </div>
+          </main>
+        </div>
+      );
+    }
   }
 
   const { question, phase, isPaused, time, totalTime, myBid, myPassed, isActiveBidder, answerOptions, result, config } = syncData;

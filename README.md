@@ -5,7 +5,7 @@ Real-time technical bidding competition platform for college events.
 ## Rules implemented
 - Starting score: 100 points
 - Bidding range: 0–20 points per question
-- 25 continuous competition questions
+- 30 continuous competition questions (Official Question Bank)
 - Correct answer: bid is added
 - Wrong answer: bid is deducted
 - Live timers and Socket.IO updates

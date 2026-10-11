@@ -9,7 +9,9 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "server": "node server/index.js",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "test": "node test_suite.js",
+    "test:load": "node load_test.js"
   },
   "dependencies": {
     "react": "^19.2.8",
