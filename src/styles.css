@@ -82,6 +82,28 @@ body {
   animation: pulsePause 2s infinite ease-in-out;
 }
 
+/* Network Disconnection Banner */
+.global-disconnect-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10000;
+  background: linear-gradient(90deg, #78350f, #b45309, #78350f);
+  color: #fef3c7;
+  text-align: center;
+  padding: 10px 20px;
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  box-shadow: 0 4px 20px rgba(180, 83, 9, 0.5);
+  animation: pulsePause 2s infinite ease-in-out;
+}
+
 @keyframes pulsePause {
   0%, 100% { opacity: 0.95; }
   50% { opacity: 0.75; }
@@ -1832,4 +1854,433 @@ body {
   padding: 24px;
   margin-bottom: 24px;
   text-align: center;
+}
+
+/* === OPTIONAL FEATURE: ADMIN APPROVAL FOR PLAYER ADMISSION STYLES === */
+.admin-badge-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f59e0b;
+  color: #000;
+  font-size: 10px;
+  font-weight: 900;
+  border-radius: 10px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* =====================================================================
+   ADMIN ADMISSIONS TAB — RESPONSIVE & HIGH-CONTRAST UI
+   ===================================================================== */
+.admissions-panel {
+  background: var(--surface-box);
+  border: 1px solid var(--border-glass);
+  border-radius: 20px;
+  padding: 24px;
+}
+
+.admissions-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.admissions-card {
+  background: #050d07;
+  border-radius: 14px;
+  padding: 16px 20px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.admissions-card:hover {
+  transform: translateY(-2px);
+}
+
+.admissions-card.pending {
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.admissions-card.approved {
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.admissions-card.rejected {
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.admissions-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.admissions-card-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.admissions-card-dot.pending {
+  background: #f59e0b;
+  box-shadow: 0 0 8px #f59e0b;
+}
+
+.admissions-card-dot.approved {
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+}
+
+.admissions-card-dot.rejected {
+  background: #ef4444;
+  box-shadow: 0 0 8px #ef4444;
+}
+
+.admissions-card-title {
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admissions-card.pending .admissions-card-title {
+  color: #f59e0b;
+}
+
+.admissions-card.approved .admissions-card-title {
+  color: #10b981;
+}
+
+.admissions-card.rejected .admissions-card-title {
+  color: #ef4444;
+}
+
+.admissions-card-value {
+  font-size: 28px;
+  font-weight: 900;
+  font-family: var(--font-mono);
+  margin-top: 6px;
+  line-height: 1.1;
+}
+
+.admissions-card.pending .admissions-card-value {
+  color: #fbbf24;
+}
+
+.admissions-card.approved .admissions-card-value {
+  color: #34d399;
+}
+
+.admissions-card.rejected .admissions-card-value {
+  color: #f87171;
+}
+
+.admissions-card-sub {
+  font-size: 11px;
+  color: var(--text-sub);
+  margin-top: 4px;
+}
+
+/* Admissions Table */
+.admissions-data-table {
+  width: 100%;
+  min-width: 740px;
+  border-collapse: collapse;
+}
+
+.admissions-data-table th {
+  padding: 14px 16px;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  color: #94a3b8;
+  border-bottom: 1px solid #16361d;
+  background: rgba(4, 14, 8, 0.6);
+  white-space: nowrap;
+}
+
+.admissions-data-table td {
+  padding: 16px;
+  border-bottom: 1px solid rgba(22, 54, 29, 0.45);
+}
+
+.admissions-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.admissions-status-pill.status-pending {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+}
+
+.admissions-status-pill.status-approved {
+  background: rgba(16, 185, 129, 0.16);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.45);
+}
+
+.admissions-status-pill.status-rejected {
+  background: rgba(239, 68, 68, 0.16);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+}
+
+.status-indicator-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-indicator-dot.pending {
+  background: #f59e0b;
+}
+
+.status-indicator-dot.approved {
+  background: #10b981;
+}
+
+.status-indicator-dot.rejected {
+  background: #ef4444;
+}
+
+.admissions-action-approved {
+  color: #34d399;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  background: rgba(16, 185, 129, 0.10);
+  border-radius: 6px;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  display: inline-block;
+}
+
+.admissions-action-rejected {
+  color: #f87171;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  background: rgba(239, 68, 68, 0.10);
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  display: inline-block;
+}
+
+/* =====================================================================
+   PLAYER ADMISSION WAITING & REJECTED SCREENS — CINEMATIC GLASS UI
+   ===================================================================== */
+.admission-glass-card {
+  width: min(500px, 94vw);
+  background: rgba(3, 11, 6, 0.88);
+  border: 1px solid rgba(0, 255, 136, 0.28);
+  box-shadow:
+    0 0 0 1px rgba(0, 255, 136, 0.08) inset,
+    0 32px 80px rgba(0, 0, 0, 0.85),
+    0 0 60px rgba(0, 255, 136, 0.12);
+}
+
+.admission-pending-card {
+  margin-top: 18px;
+  padding: 24px 22px;
+  border-radius: 18px;
+  text-align: center;
+  background: rgba(6, 18, 10, 0.92);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.admission-rejected-card {
+  margin-top: 18px;
+  padding: 24px 22px;
+  border-radius: 18px;
+  text-align: center;
+  background: rgba(18, 6, 6, 0.92);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.admission-pending-pulse {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  height: 38px;
+}
+
+.admission-pulse-ring {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid #f59e0b;
+  animation: pulseRing 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+}
+
+@keyframes pulseRing {
+  0% { transform: scale(0.6); opacity: 0.9; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+
+.admission-pulse-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fbbf24;
+  box-shadow: 0 0 16px #f59e0b;
+  animation: pulseDot 1.8s infinite ease-in-out;
+}
+
+@keyframes pulseDot {
+  0%, 100% { transform: scale(0.9); opacity: 0.7; }
+  50% { transform: scale(1.2); opacity: 1; }
+}
+
+.admission-rejected-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid #ef4444;
+  color: #f87171;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 900;
+  margin: 0 auto 14px;
+}
+
+.admission-pending-title {
+  font-size: 17px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  color: #fbbf24;
+  margin-bottom: 4px;
+  text-shadow: 0 0 14px rgba(245, 158, 11, 0.4);
+}
+
+.admission-rejected-title {
+  font-size: 17px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  color: #f87171;
+  margin-bottom: 4px;
+  text-shadow: 0 0 14px rgba(239, 68, 68, 0.4);
+}
+
+.admission-pending-subtitle {
+  font-size: 13px;
+  color: #fef3c7;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin-bottom: 16px;
+}
+
+.admission-rejected-subtitle {
+  font-size: 13px;
+  color: #fca5a5;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-bottom: 16px;
+}
+
+.admission-team-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 18px;
+  margin: 0 auto 16px;
+  border-radius: 12px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  max-width: 360px;
+}
+
+.admission-team-card.rejected {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.admission-team-label {
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.12em;
+  color: #94a3b8;
+  text-transform: uppercase;
+  margin-bottom: 3px;
+}
+
+.admission-team-name {
+  font-size: 17px;
+  font-weight: 900;
+  color: #ffffff;
+  letter-spacing: 0.02em;
+}
+
+.admission-pending-text {
+  font-size: 13px;
+  color: #e2e8f0;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.admission-cancel-btn {
+  margin-top: 22px;
+  width: 100%;
+  padding: 14px 20px;
+  border-radius: 12px;
+  border: 1px solid #475569;
+  background: #1e293b;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+.admission-cancel-btn:hover {
+  background: #334155;
+  border-color: #64748b;
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.admission-retry-btn {
+  margin-top: 22px;
+  width: 100%;
+  padding: 14px 20px;
+  border-radius: 12px;
+  border: 1px solid #dc2626;
+  background: #991b1b;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+.admission-retry-btn:hover {
+  background: #b91c1c;
+  border-color: #ef4444;
+  transform: translateY(-1px);
 }

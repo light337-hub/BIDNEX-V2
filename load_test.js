@@ -52,6 +52,7 @@ export async function runLoadTestStage(targetPlayers) {
 
   // Clean reset tournament state
   adminSocket.emit('admin:reset_tournament');
+  adminSocket.emit('admin:set_approval_mode', { enabled: false });
   await sleep(300);
 
   // Set fast test rules

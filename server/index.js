@@ -9,7 +9,8 @@ import { Server } from 'socket.io';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
-const STATE_FILE = path.join(rootDir, 'tournament_state.json');
+const STATE_FILE = process.env.STATE_FILE || path.join(rootDir, 'tournament_state.json');
+const ARCHIVE_FILE = process.env.ARCHIVE_FILE || path.join(rootDir, 'tournament_archive.json');
 const PORT = Number(process.env.PORT || 5000);
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'julie';
 
@@ -57,11 +58,16 @@ const config = {
   pendingPassPenalty: null, // if set, activates on next question start
   biddingTime: 15,
   answerTime: 10,
-  rulesLocked: false // Locked once tournament starts
+  rulesLocked: false, // Locked once tournament starts
+  requireAdminApproval: false // OPTIONAL FEATURE: Admin approval for player admission (default OFF)
 };
 
 const teams = new Map(); // teamId -> team object
 const socketTeams = new Map(); // socketId -> teamId
+
+// OPTIONAL FEATURE: Admin Admission Requests Store
+// requestId -> { id, name, members, socketId, sessionToken, status: 'pending'|'approved'|'rejected', requestedAt }
+const admissionRequests = new Map();
 
 let questions = JSON.parse(JSON.stringify(defaultQuestions));
 
@@ -93,13 +99,62 @@ let state = {
   finishedAt: null
 };
 
+// Persistent record of last concluded tournament
+let lastCompletedTournament = null;
+
+function archiveCompletedTournament(finalStandings, finishedAt, roundResults) {
+  if (!finalStandings || finalStandings.length === 0) return;
+  const record = {
+    finishedAt: finishedAt || Date.now(),
+    archivedAt: Date.now(),
+    winner: finalStandings[0] || null,
+    standings: finalStandings,
+    roundResults: roundResults || []
+  };
+  lastCompletedTournament = record;
+  try {
+    let archiveList = [];
+    if (fs.existsSync(ARCHIVE_FILE)) {
+      try {
+        const raw = fs.readFileSync(ARCHIVE_FILE, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) archiveList = parsed;
+        else if (parsed && typeof parsed === 'object') archiveList = [parsed];
+      } catch {
+        archiveList = [];
+      }
+    }
+    const exists = archiveList.some(r => r.finishedAt === record.finishedAt);
+    if (!exists) {
+      archiveList.push(record);
+      if (archiveList.length > 20) archiveList = archiveList.slice(-20);
+      fs.writeFileSync(ARCHIVE_FILE, JSON.stringify(archiveList, null, 2), 'utf-8');
+      console.log(`[ARCHIVE] Completed tournament results preserved (${finalStandings.length} teams).`);
+    }
+  } catch (err) {
+    console.error('Failed to write tournament archive:', err.message);
+  }
+}
+
 // Recovery persistence helper
 function persistTournamentState() {
   try {
     const dataToSave = {
       bankVersion: CURRENT_BANK_VERSION,
-      config,
+      config: {
+        ...config,
+        requireAdminApproval: Boolean(config.requireAdminApproval)
+      },
       questions,
+      lastCompletedTournament: lastCompletedTournament || null,
+      admissionRequests: [...admissionRequests.values()].map(r => ({
+        id: r.id,
+        name: r.name,
+        members: r.members || '',
+        sessionToken: r.sessionToken,
+        status: r.status,
+        requestedAt: r.requestedAt
+      })),
       teams: [...teams.values()].map(t => ({
         id: t.id,
         name: t.name,
@@ -140,7 +195,30 @@ function loadTournamentState() {
     if (fs.existsSync(STATE_FILE)) {
       const content = fs.readFileSync(STATE_FILE, 'utf-8');
       const saved = JSON.parse(content);
-      if (saved.config) Object.assign(config, saved.config);
+      if (saved.config) {
+        Object.assign(config, saved.config);
+        config.requireAdminApproval = Boolean(saved.config.requireAdminApproval);
+      }
+      if (Array.isArray(saved.admissionRequests)) {
+        admissionRequests.clear();
+        for (const r of saved.admissionRequests) {
+          admissionRequests.set(r.id, {
+            ...r,
+            socketId: null
+          });
+        }
+      }
+      if (saved.lastCompletedTournament) {
+        lastCompletedTournament = saved.lastCompletedTournament;
+      } else if (fs.existsSync(ARCHIVE_FILE)) {
+        try {
+          const raw = fs.readFileSync(ARCHIVE_FILE, 'utf-8');
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            lastCompletedTournament = parsed[parsed.length - 1];
+          }
+        } catch {}
+      }
       if (saved.bankVersion === CURRENT_BANK_VERSION && Array.isArray(saved.questions) && saved.questions.length >= 30) {
         questions = saved.questions;
       } else {
@@ -158,24 +236,47 @@ function loadTournamentState() {
         }
       }
       if (saved.state) {
-        state.phase = saved.state.phase || 'waiting';
-        state.isPaused = Boolean(saved.state.isPaused);
-        state.pausedPhase = saved.state.pausedPhase || null;
-        state.pausedTimerRemaining = saved.state.pausedTimerRemaining || 0;
-        state.pausedTotalTime = saved.state.pausedTotalTime || 0;
-        state.questionIndex = saved.state.questionIndex ?? -1;
-        state.currentTime = saved.state.currentTime || 0;
-        state.totalTime = saved.state.totalTime || 0;
-        state.bids = new Map(saved.state.bids || []);
-        state.passes = new Set(saved.state.passes || []);
-        state.answerQueue = saved.state.answerQueue || [];
-        state.activeQueueIndex = saved.state.activeQueueIndex || 0;
-        state.activeBidder = saved.state.activeBidder || null;
-        state.currentQuestionResult = saved.state.currentQuestionResult || null;
-        state.roundResults = saved.state.roundResults || [];
-        state.finishedAt = saved.state.finishedAt || null;
+        // If a previously saved tournament was finished, preserve final standings in archive
+        // and boot fresh into lobby 'waiting' so newly connecting lab computers never receive a pre-completed tournament.
+        if (saved.state.phase === 'finished') {
+          if (!lastCompletedTournament && Array.isArray(saved.teams) && saved.teams.length > 0) {
+            const savedStandings = [...saved.teams]
+              .map(tm => ({ id: tm.id, name: tm.name, members: tm.members || '', points: tm.points, violations: tm.violations || 0 }))
+              .sort((a, b) => b.points - a.points);
+            archiveCompletedTournament(savedStandings, saved.state.finishedAt, saved.state.roundResults);
+          }
+          state.phase = 'waiting';
+          state.finishedAt = null;
+          state.questionIndex = -1;
+          state.currentQuestionResult = null;
+          // Restore teams to lobby 100 pts
+          for (const t of teams.values()) {
+            t.points = 100;
+            t.violations = 0;
+            t.disqualified = false;
+            t.locked = false;
+          }
+          console.log('Restored previous finished tournament as clean lobby (waiting) state; completed standings preserved.');
+        } else {
+          state.phase = saved.state.phase || 'waiting';
+          state.isPaused = Boolean(saved.state.isPaused);
+          state.pausedPhase = saved.state.pausedPhase || null;
+          state.pausedTimerRemaining = saved.state.pausedTimerRemaining || 0;
+          state.pausedTotalTime = saved.state.pausedTotalTime || 0;
+          state.questionIndex = saved.state.questionIndex ?? -1;
+          state.currentTime = saved.state.currentTime || 0;
+          state.totalTime = saved.state.totalTime || 0;
+          state.bids = new Map(saved.state.bids || []);
+          state.passes = new Set(saved.state.passes || []);
+          state.answerQueue = saved.state.answerQueue || [];
+          state.activeQueueIndex = saved.state.activeQueueIndex || 0;
+          state.activeBidder = saved.state.activeBidder || null;
+          state.currentQuestionResult = saved.state.currentQuestionResult || null;
+          state.roundResults = saved.state.roundResults || [];
+          state.finishedAt = saved.state.finishedAt || null;
+          console.log(`Restored active tournament state (phase: ${state.phase}, question: ${state.questionIndex + 1}).`);
+        }
       }
-      console.log('Restored tournament state successfully from backup.');
     } else {
       persistTournamentState();
       console.log(`Initialized fresh tournament state file with ${defaultQuestions.length} official questions.`);
@@ -246,7 +347,8 @@ const snapshot = () => {
       passPenalty: config.passPenalty,
       pendingPassPenalty: config.pendingPassPenalty,
       biddingTime: config.biddingTime,
-      answerTime: config.answerTime
+      answerTime: config.answerTime,
+      requireAdminApproval: Boolean(config.requireAdminApproval)
     },
     question: currentQ ? {
       ...publicQuestion(currentQ, state.questionIndex),
@@ -284,7 +386,15 @@ const snapshot = () => {
     currentQuestionResult: state.currentQuestionResult,
     results: state.roundResults,
     finishedAt: state.finishedAt,
-    winner: state.phase === 'finished' ? ([...teams.values()].map(t => ({ id: t.id, name: t.name, points: t.points })).sort((a, b) => b.points - a.points)[0] || null) : null
+    winner: state.phase === 'finished' ? ([...teams.values()].map(t => ({ id: t.id, name: t.name, points: t.points })).sort((a, b) => b.points - a.points)[0] || null) : null,
+    lastCompletedTournament: lastCompletedTournament || null,
+    admissionRequests: [...admissionRequests.values()].map(r => ({
+      id: r.id,
+      name: r.name,
+      members: r.members || '',
+      status: r.status,
+      requestedAt: r.requestedAt
+    })).sort((a, b) => b.requestedAt - a.requestedAt)
   };
 };
 
@@ -360,10 +470,11 @@ function proceedToNextQuestion() {
     state.answerQueue = [];
     state.bids.clear();
     state.passes.clear();
-    persistTournamentState();
     const sortedStandings = [...teams.values()]
-      .map(tm => ({ id: tm.id, name: tm.name, points: tm.points }))
+      .map(tm => ({ id: tm.id, name: tm.name, members: tm.members || '', points: tm.points, violations: tm.violations || 0 }))
       .sort((a, b) => b.points - a.points);
+    archiveCompletedTournament(sortedStandings, state.finishedAt, state.roundResults);
+    persistTournamentState();
     io.emit('event:finished', {
       finishedAt: state.finishedAt,
       winner: sortedStandings[0] || null,
@@ -590,6 +701,7 @@ loadTournamentState();
 io.on('connection', socket => {
 
   // Team Registration
+  // Team Registration
   socket.on('team:join', rawPayload => {
     let name = '';
     let members = '';
@@ -605,13 +717,28 @@ io.on('connection', socket => {
     if (name.length > 30) return socket.emit('team:error', 'Team name must be 30 characters or fewer.');
     if (members.length > 100) return socket.emit('team:error', 'Team members list must be 100 characters or fewer.');
 
+    if (state.phase === 'finished') {
+      return socket.emit('team:error', 'The tournament has concluded. Please wait for the admin to reset for the next round.');
+    }
+
     const lower = name.toLowerCase();
     const existing = [...teams.values()].find(t => t.name.toLowerCase() === lower);
 
     if (existing) {
-      if (existing.socketId && existing.socketId !== socket.id) {
+      const activeOldSocket = existing.socketId ? io.sockets.sockets.get(existing.socketId) : null;
+      const isSameToken = Boolean(rawPayload && rawPayload.token && rawPayload.token === existing.sessionToken);
+
+      // Prevent a different device from hijacking an active team without matching sessionToken
+      if (activeOldSocket && activeOldSocket.connected && activeOldSocket.id !== socket.id && !isSameToken) {
         return socket.emit('team:error', 'This team is already connected from another device/window.');
       }
+
+      // If there was an old connected socket being replaced, notify and clean it up
+      if (activeOldSocket && activeOldSocket.id !== socket.id) {
+        socketTeams.delete(activeOldSocket.id);
+        activeOldSocket.emit('team:error', 'Your session was resumed in another window/device.');
+      }
+
       // Re-link existing team
       if (members && !existing.members) existing.members = members;
       existing.socketId = socket.id;
@@ -619,6 +746,70 @@ io.on('connection', socket => {
       socket.emit('team:joined', payload(existing));
       updatePlayerView(existing.id);
       emitSnapshot();
+      return;
+    }
+
+    // OPTIONAL FEATURE: Admin Admission Approval Workflow
+    if (config.requireAdminApproval) {
+      const existingReq = [...admissionRequests.values()].find(
+        r => r.name.toLowerCase() === lower || (rawPayload?.token && r.sessionToken === rawPayload.token)
+      );
+
+      if (existingReq) {
+        const isSameToken = Boolean(rawPayload?.token && existingReq.sessionToken === rawPayload.token);
+
+        if (existingReq.status === 'pending') {
+          if (!isSameToken && existingReq.socketId && existingReq.socketId !== socket.id) {
+            const oldSock = io.sockets.sockets.get(existingReq.socketId);
+            if (oldSock && oldSock.connected) {
+              return socket.emit('team:error', 'An admission request for this team name is already pending.');
+            }
+          }
+          existingReq.socketId = socket.id;
+          if (members && !existingReq.members) existingReq.members = members;
+          return socket.emit('team:approval_pending', {
+            requestId: existingReq.id,
+            sessionToken: existingReq.sessionToken,
+            teamName: existingReq.name,
+            status: 'pending',
+            message: 'ACCESS REQUEST SENT — Waiting for Admin approval.'
+          });
+        }
+
+        if (existingReq.status === 'rejected') {
+          if (isSameToken || existingReq.name.toLowerCase() === lower) {
+            return socket.emit('team:rejected', {
+              requestId: existingReq.id,
+              teamName: existingReq.name,
+              message: 'Access request was rejected by admin.'
+            });
+          }
+        }
+      }
+
+      // Create new pending admission request
+      const reqId = crypto.randomUUID();
+      const sessionToken = (rawPayload && rawPayload.token) || crypto.randomUUID();
+      const newReq = {
+        id: reqId,
+        name,
+        members,
+        socketId: socket.id,
+        sessionToken,
+        status: 'pending',
+        requestedAt: Date.now()
+      };
+      admissionRequests.set(reqId, newReq);
+      persistTournamentState();
+      emitSnapshot();
+
+      socket.emit('team:approval_pending', {
+        requestId: reqId,
+        sessionToken,
+        teamName: name,
+        status: 'pending',
+        message: 'ACCESS REQUEST SENT — Waiting for Admin approval.'
+      });
       return;
     }
 
@@ -647,14 +838,47 @@ io.on('connection', socket => {
   socket.on('team:reconnect', ({ token } = {}) => {
     if (!token) return socket.emit('team:error', 'Session token missing.');
     const t = [...teams.values()].find(x => x.sessionToken === token);
-    if (!t) return socket.emit('team:error', 'Your session has expired. Please join again.');
+    if (t) {
+      // Clean up old socket reference if different
+      if (t.socketId && t.socketId !== socket.id) {
+        const oldSock = io.sockets.sockets.get(t.socketId);
+        if (oldSock) {
+          socketTeams.delete(oldSock.id);
+        }
+      }
 
-    t.socketId = socket.id;
-    socketTeams.set(socket.id, t.id);
+      t.socketId = socket.id;
+      socketTeams.set(socket.id, t.id);
 
-    socket.emit('team:joined', payload(t));
-    updatePlayerView(t.id);
-    emitSnapshot();
+      socket.emit('team:joined', payload(t));
+      updatePlayerView(t.id);
+      emitSnapshot();
+      return;
+    }
+
+    // Check admission requests if approval is active or was used
+    const req = [...admissionRequests.values()].find(x => x.sessionToken === token);
+    if (req) {
+      req.socketId = socket.id;
+      if (req.status === 'pending') {
+        return socket.emit('team:approval_pending', {
+          requestId: req.id,
+          sessionToken: req.sessionToken,
+          teamName: req.name,
+          status: 'pending',
+          message: 'ACCESS REQUEST SENT — Waiting for Admin approval.'
+        });
+      }
+      if (req.status === 'rejected') {
+        return socket.emit('team:rejected', {
+          requestId: req.id,
+          teamName: req.name,
+          message: 'Access request was rejected by admin.'
+        });
+      }
+    }
+
+    socket.emit('team:session_expired', 'Your session has expired. Please register again.');
   });
 
   // Team Bid Submission
@@ -796,16 +1020,20 @@ function areAnswersEquivalent(a, b) {
     }
   });
 
-  // Anti-Cheating & Tab / Window Visibility Violation Tracking
+  // Anti-Cheating & Tab / Window Visibility Violation Tracking (Authoritative Cap: 0-3)
   socket.on('team:violation', data => {
     const teamId = socketTeams.get(socket.id);
     const t = teams.get(teamId);
     if (!t) return;
 
-    // Cap at 3 maximum violations
-    const current = t.violations || 0;
-    t.violations = Math.min(3, current + 1);
-    persistTournamentState();
+    // Authoritative violation count strictly capped between 0 and 3
+    const current = Math.min(3, Math.max(0, t.violations || 0));
+    if (current < 3) {
+      t.violations = current + 1;
+      persistTournamentState();
+    } else {
+      t.violations = 3; // Keep team's final-violation state active at 3/3; do not increase to 4 or higher
+    }
 
     const violationPayload = {
       teamId: t.id,
@@ -926,10 +1154,11 @@ function areAnswersEquivalent(a, b) {
     state.isPaused = false;
     state.activeBidder = null;
     state.answerQueue = [];
-    persistTournamentState();
     const sortedStandings = [...teams.values()]
-      .map(tm => ({ id: tm.id, name: tm.name, points: tm.points }))
+      .map(tm => ({ id: tm.id, name: tm.name, members: tm.members || '', points: tm.points, violations: tm.violations || 0 }))
       .sort((a, b) => b.points - a.points);
+    archiveCompletedTournament(sortedStandings, state.finishedAt, state.roundResults);
+    persistTournamentState();
     io.emit('event:finished', {
       finishedAt: state.finishedAt,
       winner: sortedStandings[0] || null,
@@ -939,16 +1168,21 @@ function areAnswersEquivalent(a, b) {
     emitSnapshot();
   }));
 
-  // Reset Tournament
+  // Reset Tournament — Full reset clears all player registrations & forces fresh login
   socket.on('admin:reset_tournament', requireAdmin(() => {
     clearTimer();
-    config.rulesLocked = false;
-    for (const t of teams.values()) {
-      t.points = 100;
-      t.violations = 0;
-      t.disqualified = false;
-      t.locked = false;
+    if (state.phase === 'finished' || (state.roundResults && state.roundResults.length > 0) || teams.size > 0) {
+      const finalStandings = [...teams.values()]
+        .map(tm => ({ id: tm.id, name: tm.name, members: tm.members || '', points: tm.points, violations: tm.violations || 0 }))
+        .sort((a, b) => b.points - a.points);
+      if (finalStandings.length > 0) {
+        archiveCompletedTournament(finalStandings, state.finishedAt || Date.now(), state.roundResults);
+      }
     }
+    config.rulesLocked = false;
+    teams.clear();
+    socketTeams.clear();
+    admissionRequests.clear();
     state.phase = 'waiting';
     state.finishedAt = null;
     state.isPaused = false;
@@ -966,8 +1200,7 @@ function areAnswersEquivalent(a, b) {
     state.totalTime = 0;
 
     persistTournamentState();
-    io.emit('event:reset');
-    broadcastPlayerViews();
+    io.emit('event:reset', { message: 'Tournament reset by Admin. Please register your team again.' });
     emitSnapshot();
   }));
 
@@ -1178,11 +1411,156 @@ function areAnswersEquivalent(a, b) {
     socket.emit('admin:notification', `Violations cleared for ${t.name}.`);
   }));
 
+  /* === OPTIONAL FEATURE: ADMIN APPROVAL FOR PLAYER ADMISSION === */
+  socket.on('admin:set_approval_mode', requireAdmin(({ enabled }) => {
+    const prevMode = config.requireAdminApproval;
+    config.requireAdminApproval = Boolean(enabled);
+
+    // If toggled OFF from ON, auto-approve any pending requests so waiting players aren't stranded
+    if (prevMode && !config.requireAdminApproval) {
+      for (const req of admissionRequests.values()) {
+        if (req.status === 'pending') {
+          req.status = 'approved';
+          let tm = [...teams.values()].find(t => t.name.toLowerCase() === req.name.toLowerCase());
+          if (!tm) {
+            tm = {
+              id: req.id,
+              name: req.name,
+              members: req.members || '',
+              points: 100,
+              sessionToken: req.sessionToken,
+              socketId: req.socketId,
+              violations: 0,
+              disqualified: false,
+              locked: false
+            };
+            teams.set(tm.id, tm);
+          }
+          if (req.socketId) {
+            socketTeams.set(req.socketId, tm.id);
+            io.to(req.socketId).emit('team:joined', payload(tm));
+            updatePlayerView(tm.id);
+          }
+        }
+      }
+    }
+
+    persistTournamentState();
+    emitSnapshot();
+    io.emit('config:update', { requireAdminApproval: config.requireAdminApproval });
+    socket.emit('admin:notification', `Admin admission approval set to ${config.requireAdminApproval ? 'ON' : 'OFF'}.`);
+  }));
+
+  socket.on('admin:approve_admission', requireAdmin(({ requestId }) => {
+    const req = admissionRequests.get(requestId);
+    if (!req) return socket.emit('admin:error', 'Admission request not found.');
+    if (req.status !== 'pending') return socket.emit('admin:error', `Request is already ${req.status}.`);
+
+    req.status = 'approved';
+    let tm = [...teams.values()].find(t => t.name.toLowerCase() === req.name.toLowerCase());
+    if (!tm) {
+      tm = {
+        id: req.id,
+        name: req.name,
+        members: req.members || '',
+        points: 100,
+        sessionToken: req.sessionToken,
+        socketId: req.socketId,
+        violations: 0,
+        disqualified: false,
+        locked: false
+      };
+      teams.set(tm.id, tm);
+    }
+    if (req.socketId) {
+      socketTeams.set(req.socketId, tm.id);
+      io.to(req.socketId).emit('team:joined', payload(tm));
+      updatePlayerView(tm.id);
+    }
+
+    persistTournamentState();
+    emitSnapshot();
+    socket.emit('admin:notification', `Approved team "${req.name}".`);
+  }));
+
+  socket.on('admin:reject_admission', requireAdmin(({ requestId }) => {
+    const req = admissionRequests.get(requestId);
+    if (!req) return socket.emit('admin:error', 'Admission request not found.');
+    if (req.status !== 'pending') return socket.emit('admin:error', `Request is already ${req.status}.`);
+
+    req.status = 'rejected';
+    if (req.socketId) {
+      io.to(req.socketId).emit('team:rejected', {
+        requestId: req.id,
+        teamName: req.name,
+        message: 'Access request was rejected by admin.'
+      });
+    }
+
+    persistTournamentState();
+    emitSnapshot();
+    socket.emit('admin:notification', `Rejected request for team "${req.name}".`);
+  }));
+
+  socket.on('admin:approve_all_admissions', requireAdmin(() => {
+    let approvedCount = 0;
+    for (const req of admissionRequests.values()) {
+      if (req.status === 'pending') {
+        req.status = 'approved';
+        let tm = [...teams.values()].find(t => t.name.toLowerCase() === req.name.toLowerCase());
+        if (!tm) {
+          tm = {
+            id: req.id,
+            name: req.name,
+            members: req.members || '',
+            points: 100,
+            sessionToken: req.sessionToken,
+            socketId: req.socketId,
+            violations: 0,
+            disqualified: false,
+            locked: false
+          };
+          teams.set(tm.id, tm);
+        }
+        if (req.socketId) {
+          socketTeams.set(req.socketId, tm.id);
+          io.to(req.socketId).emit('team:joined', payload(tm));
+          updatePlayerView(tm.id);
+        }
+        approvedCount++;
+      }
+    }
+
+    persistTournamentState();
+    emitSnapshot();
+    socket.emit('admin:notification', `Approved all ${approvedCount} pending admission requests.`);
+  }));
+
+  socket.on('admin:clear_admission_history', requireAdmin(() => {
+    for (const [id, req] of [...admissionRequests.entries()]) {
+      if (req.status === 'approved' || req.status === 'rejected') {
+        admissionRequests.delete(id);
+      }
+    }
+    persistTournamentState();
+    emitSnapshot();
+    socket.emit('admin:notification', 'Cleared completed admission request history.');
+  }));
+
   // Disconnect handler
   socket.on('disconnect', () => {
     const teamId = socketTeams.get(socket.id);
     if (teamId && teams.has(teamId)) {
-      teams.get(teamId).socketId = null;
+      const t = teams.get(teamId);
+      // Only clear socketId if it matches this disconnecting socket
+      if (t.socketId === socket.id) {
+        t.socketId = null;
+      }
+    }
+    for (const req of admissionRequests.values()) {
+      if (req.socketId === socket.id) {
+        req.socketId = null;
+      }
     }
     socketTeams.delete(socket.id);
     emitSnapshot();
@@ -1204,14 +1582,39 @@ app.get('/api/health', (_, res) => res.json({
 app.get('/api/config', (_, res) => res.json({
   passPenalty: config.passPenalty,
   bidChoices: config.bidChoices,
-  startingScore: 100
+  startingScore: 100,
+  requireAdminApproval: Boolean(config.requireAdminApproval)
+}));
+
+app.get('/api/standings/last', (_, res) => res.json({
+  lastCompletedTournament: lastCompletedTournament || null
+}));
+
+// Serve immutable hashed bundles
+app.use('/assets', express.static(path.join(distDir, 'assets'), {
+  maxAge: '1y',
+  immutable: true
 }));
 
 app.use(express.static(path.join(rootDir, 'public')));
-app.use(express.static(distDir));
+
+// Prevent browser/lab caching of index.html and root files
+app.use(express.static(distDir, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
+
 app.use((_, res) => {
   const indexPath = path.join(distDir, 'index.html');
   if (fs.existsSync(indexPath)) {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.sendFile(indexPath);
   } else {
     res.status(200).send('BIDNEX V2 Engine active. Run build to generate frontend.');

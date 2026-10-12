@@ -39,6 +39,7 @@ async function runTest() {
 
   // Reset tournament to clean state
   adminSocket.emit('admin:reset_tournament');
+  adminSocket.emit('admin:set_approval_mode', { enabled: false });
   await sleep(500);
 
   // 2. Configure Rules (bid choices & pass penalty)

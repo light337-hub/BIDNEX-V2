@@ -9,9 +9,18 @@ const getSocketUrl = () => {
   return loc.origin;
 };
 
-const socket = io(getSocketUrl(), { autoConnect: true });
+const socket = io(getSocketUrl(), {
+  autoConnect: true,
+  transports: ['polling', 'websocket'],
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
+  timeout: 20000
+});
 
 export default function Participant() {
+  const [isConnected, setIsConnected] = useState(socket.connected);
   const [teamName, setTeamName] = useState('');
   const [teamMembers, setTeamMembers] = useState('');
   const [team, setTeam] = useState(null);
@@ -39,6 +48,12 @@ export default function Participant() {
   const [violationNotice, setViolationNotice] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
 
+  // OPTIONAL FEATURE: Admission Approval State
+  const [admissionStatus, setAdmissionStatus] = useState(null); // null, 'pending', 'rejected'
+  const [admissionMessage, setAdmissionMessage] = useState('');
+  const [admissionTeamName, setAdmissionTeamName] = useState('');
+  const [requireApprovalConfig, setRequireApprovalConfig] = useState(false);
+
   // Cinematic Ending Video State
   const [videoStage, setVideoStage] = useState('initial'); // 'initial', 'video', 'final', 'error'
   const [isMuted, setIsMuted] = useState(true);
@@ -46,18 +61,47 @@ export default function Participant() {
   const videoRef = useRef(null);
   const hasPlayedVideoRef = useRef(false);
 
-  // 18. Tab Switch & Window Focus Anti-Cheating Detection
+  // Fetch initial config for approval mode
+  useEffect(() => {
+    fetch('/api/config')
+      .then(res => res.json())
+      .then(cfg => {
+        if (cfg && cfg.requireAdminApproval !== undefined) {
+          setRequireApprovalConfig(Boolean(cfg.requireAdminApproval));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // 18. Tab Switch & Window Focus Anti-Cheating Detection with Transition Guard
   useEffect(() => {
     if (!team) return;
 
+    let lastReportTime = 0;
+    const REPORT_COOLDOWN_MS = 2000;
+
+    const reportViolation = (type) => {
+      // Ignore further counting if team has already reached the maximum limit
+      if (team.violations >= 3) return;
+
+      const now = Date.now();
+      if (now - lastReportTime < REPORT_COOLDOWN_MS) {
+        return; // Guard: suppress duplicate/burst events for a single switch incident
+      }
+      lastReportTime = now;
+      socket.emit('team:violation', { type });
+    };
+
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        socket.emit('team:violation', { type: 'tab_switch' });
+        reportViolation('tab_switch');
       }
     };
 
     const handleBlur = () => {
-      socket.emit('team:violation', { type: 'window_blur' });
+      // If the document is already hidden, visibilitychange has already handled this tab switch
+      if (document.hidden) return;
+      reportViolation('window_blur');
     };
 
     const handleContextMenu = (e) => e.preventDefault();
@@ -86,13 +130,70 @@ export default function Participant() {
 
   // Socket Listeners
   useEffect(() => {
+    const onConnect = () => {
+      setIsConnected(true);
+      setErrorMessage('');
+      const savedToken = localStorage.getItem('bidnex_token');
+      if (savedToken) {
+        socket.emit('team:reconnect', { token: savedToken });
+      }
+    };
+
+    const onDisconnect = () => {
+      setIsConnected(false);
+    };
+
+    const onConnectError = (err) => {
+      setIsConnected(false);
+      console.warn('Participant socket connection error:', err?.message);
+    };
+
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+    socket.on('connect_error', onConnectError);
+
+    if (socket.connected) {
+      onConnect();
+    }
+
+    socket.on('config:update', (cfg) => {
+      if (cfg && cfg.requireAdminApproval !== undefined) {
+        setRequireApprovalConfig(Boolean(cfg.requireAdminApproval));
+      }
+    });
+
+    socket.on('team:approval_pending', (data) => {
+      setAdmissionStatus('pending');
+      setAdmissionMessage(data?.message || 'ACCESS REQUEST SENT — Waiting for Admin approval.');
+      if (data?.teamName) setAdmissionTeamName(data.teamName);
+      if (data?.sessionToken) localStorage.setItem('bidnex_token', data.sessionToken);
+      setErrorMessage('');
+    });
+
+    socket.on('team:rejected', (data) => {
+      setAdmissionStatus('rejected');
+      setAdmissionMessage(data?.message || 'Access request was rejected by admin.');
+      if (data?.teamName) setAdmissionTeamName(data.teamName);
+      setErrorMessage('');
+    });
+
     socket.on('team:joined', (teamData) => {
       setTeam(teamData);
+      setAdmissionStatus(null);
+      setAdmissionMessage('');
       setErrorMessage('');
       localStorage.setItem('bidnex_token', teamData.sessionToken);
     });
 
     socket.on('team:error', (msg) => {
+      setErrorMessage(msg);
+    });
+
+    socket.on('team:session_expired', (msg) => {
+      localStorage.removeItem('bidnex_token');
+      setTeam(null);
+      setAdmissionStatus(null);
+      setAdmissionMessage('');
       setErrorMessage(msg);
     });
 
@@ -121,9 +222,9 @@ export default function Participant() {
         answerOptions: data.answerOptions,
         result: data.result,
         config: data.config || prev.config,
-        finishedAt: data.finishedAt || prev.finishedAt,
+        finishedAt: data.finishedAt !== undefined ? data.finishedAt : prev.finishedAt,
         winner: data.winner !== undefined ? data.winner : prev.winner,
-        leaderboard: data.leaderboard || prev.leaderboard
+        leaderboard: data.leaderboard !== undefined ? data.leaderboard : prev.leaderboard
       }));
 
       // Reset local answer locks on round change
@@ -175,26 +276,50 @@ export default function Participant() {
       setTimeout(() => setViolationNotice(null), 5000);
     });
 
-    socket.on('event:reset', () => {
+    socket.on('event:reset', (payload) => {
+      localStorage.removeItem('bidnex_token');
       setTeam(null);
       setSelectedBid(null);
+      setAnswerLocked(false);
+      setSelectedOption(null);
       setFeedback(null);
-      setErrorMessage('');
+      setViolationNotice(null);
+      setErrorMessage(payload?.message || 'Tournament reset by Admin. Please register your team again.');
       setVideoStage('initial');
       setAutoplayBlocked(false);
       hasPlayedVideoRef.current = false;
-      localStorage.removeItem('bidnex_token');
+      setAdmissionStatus(null);
+      setAdmissionMessage('');
+      setAdmissionTeamName('');
+      // Complete reset of tournament state back to lobby
+      setSyncData(prev => ({
+        ...prev,
+        phase: 'waiting',
+        isPaused: false,
+        question: null,
+        time: 0,
+        totalTime: 0,
+        myBid: null,
+        myPassed: false,
+        isActiveBidder: false,
+        answerOptions: null,
+        result: null,
+        finishedAt: null,
+        winner: null,
+        leaderboard: null
+      }));
     });
 
-    // Auto-reconnect session check
-    const savedToken = localStorage.getItem('bidnex_token');
-    if (savedToken) {
-      socket.emit('team:reconnect', { token: savedToken });
-    }
-
     return () => {
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      socket.off('connect_error', onConnectError);
+      socket.off('config:update');
+      socket.off('team:approval_pending');
+      socket.off('team:rejected');
       socket.off('team:joined');
       socket.off('team:error');
+      socket.off('team:session_expired');
       socket.off('bid:error');
       socket.off('player:error');
       socket.off('player:sync');
@@ -210,8 +335,14 @@ export default function Participant() {
 
   const handleJoin = (e) => {
     e.preventDefault();
+    if (!isConnected) return setErrorMessage('Connecting to game server... Please wait a moment.');
     if (!teamName.trim()) return setErrorMessage('Please enter your team name.');
-    socket.emit('team:join', { name: teamName.trim(), members: teamMembers.trim() });
+    const savedToken = localStorage.getItem('bidnex_token');
+    socket.emit('team:join', {
+      name: teamName.trim(),
+      members: teamMembers.trim(),
+      token: savedToken || undefined
+    });
   };
 
   const handleLockBid = () => {
@@ -282,6 +413,99 @@ export default function Participant() {
   // Registration Screen — Glassmorphism + Poster
   if (!team) {
     const passPenalty = syncData.config?.passPenalty ?? 5;
+
+    // OPTIONAL FEATURE: Admission Pending Waiting Screen
+    if (admissionStatus === 'pending') {
+      return (
+        <div className="login-arena">
+          <div className="login-poster-bg" />
+          <div className="login-poster-overlay" />
+          <div className="login-glass-card admission-glass-card">
+            <div className="login-brand">BIDNEX</div>
+            <div className="login-subtitle">ADMISSION REQUEST PENDING</div>
+
+            <div className="admission-pending-card">
+              <div className="admission-pending-pulse">
+                <span className="admission-pulse-ring" />
+                <span className="admission-pulse-dot" />
+              </div>
+
+              <div className="admission-pending-title">ACCESS REQUEST SENT</div>
+              <div className="admission-pending-subtitle">WAITING FOR ADMIN APPROVAL</div>
+
+              {admissionTeamName && (
+                <div className="admission-team-card">
+                  <div className="admission-team-label">REGISTERED TEAM</div>
+                  <div className="admission-team-name">{admissionTeamName}</div>
+                </div>
+              )}
+
+              <p className="admission-pending-text">
+                Your admission request has been sent to the competition administrators. Please keep this screen open — once approved, you will automatically enter the arena.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="admission-cancel-btn"
+              onClick={() => {
+                localStorage.removeItem('bidnex_token');
+                setAdmissionStatus(null);
+                setAdmissionTeamName('');
+              }}
+            >
+              CANCEL REQUEST & CHANGE TEAM
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // OPTIONAL FEATURE: Admission Rejected Screen
+    if (admissionStatus === 'rejected') {
+      return (
+        <div className="login-arena">
+          <div className="login-poster-bg" />
+          <div className="login-poster-overlay" />
+          <div className="login-glass-card admission-glass-card">
+            <div className="login-brand">BIDNEX</div>
+            <div className="login-subtitle" style={{ color: '#f87171' }}>ADMISSION REJECTED</div>
+
+            <div className="admission-rejected-card">
+              <div className="admission-rejected-icon">✕</div>
+              <div className="admission-rejected-title">ACCESS REQUEST REJECTED</div>
+              <div className="admission-rejected-subtitle">
+                {admissionMessage || 'Access request was rejected by admin.'}
+              </div>
+
+              {admissionTeamName && (
+                <div className="admission-team-card rejected">
+                  <div className="admission-team-label">REQUESTED TEAM</div>
+                  <div className="admission-team-name">{admissionTeamName}</div>
+                </div>
+              )}
+
+              <p className="admission-pending-text">
+                The competition administrator did not approve this team. You cannot participate with this team name. Please try another team.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="admission-retry-btn"
+              onClick={() => {
+                localStorage.removeItem('bidnex_token');
+                setAdmissionStatus(null);
+                setAdmissionTeamName('');
+              }}
+            >
+              TRY ANOTHER TEAM
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="login-arena">
         <div className="login-poster-bg" />
@@ -289,6 +513,13 @@ export default function Participant() {
         <div className="login-glass-card">
           <div className="login-brand">BIDNEX</div>
           <div className="login-subtitle">LIVE TECHNICAL COMPETITION</div>
+
+          {!isConnected && (
+            <div style={{ background: 'rgba(239, 68, 68, 0.2)', border: '1px solid #ef4444', color: '#fca5a5', padding: '10px 14px', borderRadius: 10, fontSize: 13, textAlign: 'center', marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />
+              Connecting to game server... Please wait a moment.
+            </div>
+          )}
 
           <form onSubmit={handleJoin} className="login-form">
             <div className="login-field">
@@ -315,8 +546,8 @@ export default function Participant() {
                 maxLength={100}
               />
             </div>
-            <button type="submit" className="login-btn">
-              ENTER THE ARENA <span className="login-btn-arrow">→</span>
+            <button type="submit" className="login-btn" disabled={!isConnected} style={!isConnected ? { opacity: 0.65, cursor: 'not-allowed' } : {}}>
+              {isConnected ? (requireApprovalConfig ? 'REQUEST ADMIN APPROVAL' : 'ENTER THE ARENA') : 'CONNECTING...'} <span className="login-btn-arrow">→</span>
             </button>
           </form>
 
@@ -546,9 +777,16 @@ export default function Participant() {
 
   return (
     <div className="player-shell">
+      {/* Network Disconnection Notification */}
+      {!isConnected && (
+        <div className="global-disconnect-banner">
+          <span>⚡</span> NETWORK DISCONNECTED — RECONNECTING TO GAME SERVER...
+        </div>
+      )}
+
       {/* Global Server Pause Notification */}
       {isPaused && (
-        <div className="global-pause-banner">
+        <div className="global-pause-banner" style={!isConnected ? { top: 42 } : {}}>
           <span>⏸</span> TOURNAMENT PAUSED BY ADMIN — TIMERS & CONTROLS FROZEN
         </div>
       )}
@@ -561,7 +799,7 @@ export default function Participant() {
       )}
 
       {/* Header */}
-      <header className="player-topbar" style={isPaused ? { marginTop: 42 } : {}}>
+      <header className="player-topbar" style={(!isConnected && isPaused) ? { marginTop: 84 } : (!isConnected || isPaused) ? { marginTop: 42 } : {}}>
         <div className="player-brand-badge">
           <span className="brand-dot" /> BIDNEX
         </div>

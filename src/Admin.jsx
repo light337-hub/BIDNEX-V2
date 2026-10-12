@@ -9,9 +9,18 @@ const getSocketUrl = () => {
   return loc.origin;
 };
 
-const socket = io(getSocketUrl(), { autoConnect: true });
+const socket = io(getSocketUrl(), {
+  autoConnect: true,
+  transports: ['polling', 'websocket'],
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
+  timeout: 20000
+});
 
 export default function Admin() {
+  const [isConnected, setIsConnected] = useState(socket.connected);
   const [password, setPassword] = useState('');
   const [authenticated, setAuthenticated] = useState(false);
   const [activeTab, setActiveTab] = useState('arena'); // arena, questions, rules, teams
@@ -54,6 +63,32 @@ export default function Admin() {
   const [livePenaltyInput, setLivePenaltyInput] = useState('');
 
   useEffect(() => {
+    const onConnect = () => {
+      setIsConnected(true);
+      setError('');
+      const savedPass = sessionStorage.getItem('bidnex_admin_pass');
+      if (savedPass) {
+        socket.emit('admin:auth', savedPass);
+      }
+    };
+
+    const onDisconnect = () => {
+      setIsConnected(false);
+    };
+
+    const onConnectError = (err) => {
+      setIsConnected(false);
+      console.warn('Admin socket connection error:', err?.message);
+    };
+
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+    socket.on('connect_error', onConnectError);
+
+    if (socket.connected) {
+      onConnect();
+    }
+
     socket.on('admin:authenticated', () => {
       setAuthenticated(true);
       setError('');
@@ -61,6 +96,10 @@ export default function Admin() {
 
     socket.on('admin:error', (msg) => {
       setError(msg);
+      if (String(msg).toLowerCase().includes('password') || String(msg).toLowerCase().includes('unauthorized')) {
+        sessionStorage.removeItem('bidnex_admin_pass');
+        setAuthenticated(false);
+      }
       setTimeout(() => setError(''), 4000);
     });
 
@@ -84,14 +123,18 @@ export default function Admin() {
     });
 
     socket.on('admin:violation_alert', ({ teamName, violationCount, isFinal }) => {
-      if (violationCount >= 3 || isFinal) {
+      const count = Math.min(3, Math.max(1, violationCount || 1));
+      if (count >= 3 || isFinal) {
         setNotification(`🚨 FINAL VIOLATION 3/3: ${teamName} left page/tab — Admin action recommended`);
       } else {
-        setNotification(`⚠️ VIOLATION: ${teamName} switched tabs/blurred (${violationCount}/3 warnings)`);
+        setNotification(`⚠️ VIOLATION: ${teamName} switched tabs/blurred (${count}/3 warnings)`);
       }
     });
 
     return () => {
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      socket.off('connect_error', onConnectError);
       socket.off('admin:authenticated');
       socket.off('admin:error');
       socket.off('admin:notification');
@@ -104,6 +147,7 @@ export default function Admin() {
   const handleLogin = (e) => {
     e.preventDefault();
     if (!password) return;
+    sessionStorage.setItem('bidnex_admin_pass', password);
     socket.emit('admin:auth', password);
   };
 
@@ -188,6 +232,33 @@ export default function Admin() {
     setLivePenaltyInput('');
   };
 
+  // OPTIONAL FEATURE: Admission Approval Handlers
+  const admissionRequests = data.admissionRequests || [];
+  const pendingAdmissionCount = admissionRequests.filter(r => r.status === 'pending').length;
+  const approvedAdmissionCount = admissionRequests.filter(r => r.status === 'approved').length;
+  const rejectedAdmissionCount = admissionRequests.filter(r => r.status === 'rejected').length;
+  const requireApproval = Boolean(data.config?.requireAdminApproval);
+
+  const handleToggleApprovalMode = () => {
+    socket.emit('admin:set_approval_mode', { enabled: !requireApproval });
+  };
+
+  const handleApproveAdmission = (requestId) => {
+    socket.emit('admin:approve_admission', { requestId });
+  };
+
+  const handleRejectAdmission = (requestId) => {
+    socket.emit('admin:reject_admission', { requestId });
+  };
+
+  const handleApproveAllAdmissions = () => {
+    socket.emit('admin:approve_all_admissions');
+  };
+
+  const handleClearAdmissionHistory = () => {
+    socket.emit('admin:clear_admission_history');
+  };
+
   // Admin Login — Glassmorphism + Poster (matches player login)
   if (!authenticated) {
     return (
@@ -245,17 +316,28 @@ export default function Admin() {
 
   return (
     <div className="admin-shell">
+      {/* Network Disconnection Notification */}
+      {!isConnected && (
+        <div className="global-disconnect-banner">
+          <span>⚡</span> DISCONNECTED FROM SERVER — RECONNECTING...
+        </div>
+      )}
+
       {/* Pause Notification Banner */}
       {isPaused && (
-        <div className="global-pause-banner">
+        <div className="global-pause-banner" style={!isConnected ? { top: 42 } : {}}>
           <span>⏸</span> GAME FROZEN GLOBALLY — ALL PLAYER TIMERS AND INPUTS DISABLED
         </div>
       )}
 
       {/* Admin Header */}
-      <header className="admin-header" style={isPaused ? { marginTop: 42 } : {}}>
+      <header className="admin-header" style={(!isConnected && isPaused) ? { marginTop: 84 } : (!isConnected || isPaused) ? { marginTop: 42 } : {}}>
         <div className="admin-brand">
           <div className="admin-title">BIDNEX // MASTER</div>
+          <span className="admin-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: isConnected ? '#052e16' : '#450a0a', color: isConnected ? '#4ade80' : '#f87171', border: isConnected ? '1px solid #166534' : '1px solid #991b1b' }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: isConnected ? '#4ade80' : '#ef4444' }} />
+            {isConnected ? 'ONLINE' : 'RECONNECTING'}
+          </span>
           <span className="admin-tag">ROUND {Math.max(0, questionNumber)} / {totalQuestions}</span>
           <span className="admin-tag" style={{ background: phase === 'bidding' ? '#14351c' : phase === 'answering' ? '#3d2c0b' : '#1e293b' }}>
             {phase.toUpperCase()}
@@ -299,7 +381,7 @@ export default function Admin() {
             RESTART QUESTION
           </button>
 
-          <button className="admin-btn admin-btn-danger" onClick={() => { if (window.confirm('Reset the tournament and restore all teams to 100 points?')) socket.emit('admin:reset_tournament'); }}>
+          <button className="admin-btn admin-btn-danger" onClick={() => { if (window.confirm('WARNING: Resetting will clear all registered teams and force all players to register again. Current standings will be archived. Are you sure you want to reset the tournament?')) socket.emit('admin:reset_tournament'); }}>
             RESET TOURNAMENT
           </button>
         </div>
@@ -318,6 +400,9 @@ export default function Admin() {
         </button>
         <button className={`admin-nav-tab ${activeTab === 'teams' ? 'active' : ''}`} onClick={() => setActiveTab('teams')}>
           TEAMS & VIOLATIONS ({teams.length})
+        </button>
+        <button className={`admin-nav-tab ${activeTab === 'admissions' ? 'active' : ''}`} onClick={() => setActiveTab('admissions')}>
+          ADMISSIONS {pendingAdmissionCount > 0 && <span className="admin-badge-count">{pendingAdmissionCount}</span>}
         </button>
       </div>
 
@@ -385,7 +470,7 @@ export default function Admin() {
                       className="admin-btn admin-btn-danger"
                       style={{ padding: '10px 22px', fontSize: 13, margin: '0 auto' }}
                       onClick={() => {
-                        if (window.confirm('Reset tournament and restore all teams to 100 points?')) {
+                        if (window.confirm('WARNING: Resetting will clear all registered teams and force all players to register again. Current standings will be archived. Are you sure you want to reset the tournament?')) {
                           socket.emit('admin:reset_tournament');
                         }
                       }}
@@ -667,6 +752,28 @@ export default function Admin() {
               </form>
             </div>
 
+            {/* OPTIONAL FEATURE: Admission Approval Toggle */}
+            <div style={{ background: '#071410', border: '1px solid rgba(0,255,136,0.2)', borderRadius: 16, padding: 20, marginBottom: 24 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: '#a7f3d0', letterSpacing: '0.08em' }}>
+                    🛡️ REQUIRE ADMIN APPROVAL FOR PLAYER ADMISSION
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-sub)', marginTop: 4 }}>
+                    When enabled, player registrations enter a pending queue until approved by an administrator.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className={`admin-btn ${requireApproval ? 'admin-btn-resume' : 'admin-btn-secondary'}`}
+                  style={{ minWidth: 130, textAlign: 'center' }}
+                  onClick={handleToggleApprovalMode}
+                >
+                  {requireApproval ? 'ON (ACTIVE)' : 'OFF (DISABLED)'}
+                </button>
+              </div>
+            </div>
+
             <form onSubmit={handleSaveRules}>
               <div style={{ fontSize: 12, color: 'var(--text-sub)', marginBottom: 14, fontStyle: 'italic' }}>
                 The fields below are locked once the tournament starts. Use the panel above to change PASS penalty mid-game.
@@ -788,6 +895,156 @@ export default function Admin() {
                     <tr>
                       <td colSpan="5" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-sub)' }}>
                         No teams registered.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* OPTIONAL FEATURE: Admissions Management Tab */}
+        {activeTab === 'admissions' && (
+          <div className="control-panel-box admissions-panel">
+            <div className="panel-header-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
+              <div>
+                <div className="panel-title" style={{ fontSize: 16 }}>PLAYER ADMISSION APPROVAL</div>
+                <div style={{ fontSize: 12, color: 'var(--text-sub)', marginTop: 4 }}>
+                  Review, approve, or reject participant team access requests in real-time.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className={`admin-btn ${requireApproval ? 'admin-btn-resume' : 'admin-btn-secondary'}`}
+                  style={{ minWidth: 160 }}
+                  onClick={handleToggleApprovalMode}
+                >
+                  REQUIRE APPROVAL: <strong>{requireApproval ? 'ON' : 'OFF'}</strong>
+                </button>
+                {pendingAdmissionCount > 0 && (
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn-primary"
+                    onClick={handleApproveAllAdmissions}
+                  >
+                    ✓ APPROVE ALL ({pendingAdmissionCount})
+                  </button>
+                )}
+                {(approvedAdmissionCount > 0 || rejectedAdmissionCount > 0) && (
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn-secondary"
+                    onClick={handleClearAdmissionHistory}
+                  >
+                    CLEAR HISTORY
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Status Summary Cards */}
+            <div className="admissions-summary-grid">
+              <div className="admissions-card pending">
+                <div className="admissions-card-header">
+                  <span className="admissions-card-dot pending" />
+                  <span className="admissions-card-title">PENDING APPROVAL</span>
+                </div>
+                <div className="admissions-card-value">{pendingAdmissionCount}</div>
+                <div className="admissions-card-sub">Waiting for decision</div>
+              </div>
+
+              <div className="admissions-card approved">
+                <div className="admissions-card-header">
+                  <span className="admissions-card-dot approved" />
+                  <span className="admissions-card-title">APPROVED TEAMS</span>
+                </div>
+                <div className="admissions-card-value">{approvedAdmissionCount}</div>
+                <div className="admissions-card-sub">Admitted to competition</div>
+              </div>
+
+              <div className="admissions-card rejected">
+                <div className="admissions-card-header">
+                  <span className="admissions-card-dot rejected" />
+                  <span className="admissions-card-title">REJECTED REQUESTS</span>
+                </div>
+                <div className="admissions-card-value">{rejectedAdmissionCount}</div>
+                <div className="admissions-card-sub">Access declined</div>
+              </div>
+            </div>
+
+            {/* Admission Requests Table */}
+            <div className="admin-table-container">
+              <table className="admin-data-table admissions-data-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: '25%', minWidth: 170 }}>TEAM NAME</th>
+                    <th style={{ width: '27%', minWidth: 180 }}>NAME / MEMBERS</th>
+                    <th style={{ width: '18%', minWidth: 130 }}>REQUEST TIME</th>
+                    <th style={{ width: '14%', minWidth: 120 }}>STATUS</th>
+                    <th style={{ width: '16%', minWidth: 160, textAlign: 'right' }}>ACTIONS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {admissionRequests.map((req) => (
+                    <tr key={req.id}>
+                      <td style={{ verticalAlign: 'middle' }}>
+                        <strong style={{ color: '#ffffff', fontSize: 14, letterSpacing: '0.02em', display: 'block' }}>
+                          {req.name}
+                        </strong>
+                      </td>
+                      <td style={{ verticalAlign: 'middle' }}>
+                        <span style={{ color: '#94a3b8', fontSize: 13, wordBreak: 'break-word', display: 'block' }}>
+                          {req.members || '—'}
+                        </span>
+                      </td>
+                      <td style={{ verticalAlign: 'middle' }}>
+                        <span style={{ color: 'var(--text-sub)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>
+                          {req.requestedAt ? new Date(req.requestedAt).toLocaleTimeString() : '—'}
+                        </span>
+                      </td>
+                      <td style={{ verticalAlign: 'middle' }}>
+                        <span className={`admissions-status-pill status-${req.status}`}>
+                          <span className={`status-indicator-dot ${req.status}`} />
+                          {req.status.toUpperCase()}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'right', verticalAlign: 'middle' }}>
+                        {req.status === 'pending' ? (
+                          <div style={{ display: 'inline-flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
+                            <button
+                              className="admin-btn admin-btn-primary"
+                              style={{ padding: '6px 14px', fontSize: 11, fontWeight: 800 }}
+                              onClick={() => handleApproveAdmission(req.id)}
+                            >
+                              ✓ APPROVE
+                            </button>
+                            <button
+                              className="admin-btn admin-btn-danger"
+                              style={{ padding: '6px 14px', fontSize: 11, fontWeight: 800 }}
+                              onClick={() => handleRejectAdmission(req.id)}
+                            >
+                              ✕ REJECT
+                            </button>
+                          </div>
+                        ) : req.status === 'approved' ? (
+                          <span className="admissions-action-approved">
+                            APPROVED ✓
+                          </span>
+                        ) : (
+                          <span className="admissions-action-rejected">
+                            REJECTED ✕
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {admissionRequests.length === 0 && (
+                    <tr>
+                      <td colSpan="5" style={{ textAlign: 'center', padding: '36px 20px', color: 'var(--text-sub)', fontSize: 13 }}>
+                        No admission requests recorded. When players register with Admin Approval ON, requests will appear here.
                       </td>
                     </tr>
                   )}
